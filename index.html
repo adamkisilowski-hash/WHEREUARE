@@ -118,7 +118,7 @@
             </div>
           </div>
           <button id="train-toggle" class="ms-train" data-i18n-title="train.modeTitle">
-            <span class="ms-train-label"><span class="ms-train-icon" aria-hidden="true">🚆</span><span data-i18n="train.mode">Train mode</span></span>
+            <span class="ms-train-label"><span class="ms-train-icon" aria-hidden="true">🚆🚌</span><span data-i18n="train.mode">Transit mode</span></span>
             <span id="train-state" class="ms-train-state">off</span>
           </button>
         </div>
@@ -167,7 +167,7 @@
       <button class="tab is-active" role="tab" aria-selected="true" data-tab="now" data-i18n="nav.now">Now</button>
       <button class="tab" role="tab" aria-selected="false" data-tab="trip" data-i18n="nav.trip">Trip</button>
       <button class="tab" role="tab" aria-selected="false" data-tab="places" data-i18n="nav.places">Places</button>
-      <button id="tab-train" class="tab" role="tab" aria-selected="false" data-tab="train" data-i18n="nav.train" hidden>Train</button>
+      <button id="tab-train" class="tab" role="tab" aria-selected="false" data-tab="train" data-i18n="nav.train" hidden>Transit</button>
     </nav>
 
     <section class="tab-panel is-active" data-panel="now" role="tabpanel">
@@ -259,7 +259,7 @@
     </section>
 
     <section class="tab-panel" data-panel="train" role="tabpanel">
-      <p id="train-status" class="muted" data-i18n="train.searching">Looking for the track you're on…</p>
+      <p id="train-status" class="muted" data-i18n="train.searching">Looking for a line or stop near you…</p>
 
       <div id="train-card" class="train-card" hidden>
         <div class="train-headline">
@@ -291,7 +291,7 @@
       <ol id="train-stops" class="train-stops"></ol>
       <p id="train-stops-empty" class="muted" data-i18n="train.noStops">No stations ahead yet — this needs you to be moving before it can tell which way you're going.</p>
 
-      <p class="muted train-disclaimer" data-i18n="train.disclaimer">Estimated from OpenStreetMap's railway data and your own speed and heading — not a timetable lookup, so it names the line and the kind of service, never a specific train number.</p>
+      <p class="muted train-disclaimer" data-i18n="train.disclaimer">Estimated from OpenStreetMap's railway and bus-stop data and your own speed and heading — not a timetable lookup, so it names the line or nearby routes, never a specific train number or bus run.</p>
     </section>
 
     <footer class="panel-foot">

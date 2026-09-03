@@ -63,7 +63,9 @@
       // way am I going", and whether you're on the stopping or fast service.
       // In-memory only: they belong to this journey, not to the saved prefs.
       chosenBearing: null,
-      stopPattern: 'all'
+      stopPattern: 'all',
+      mode: null,        // 'rail' | 'bus' | null — which of the two we think you're near
+      busRoutes: []      // route_ref values tagged on nearby bus stops
     }
   };
 
@@ -711,13 +713,17 @@
 
   /* What this can and cannot know, stated plainly because the difference
    * matters: OpenStreetMap describes *infrastructure* — where the rails
-   * run, what the line is called, which stations sit on it. It says nothing
-   * about which service is running on those rails right now. So this infers
-   * the line you're on and the stations ahead of you from real mapped data
-   * plus your own speed and heading, and estimates the *kind* of service
-   * that implies. It never claims a train number: that would need a live
-   * timetable feed, which needs a backend and an operator's API key, and
-   * inventing one from a plausible guess would be worse than saying so. */
+   * run, what the line is called, which stations and bus stops sit where.
+   * It says nothing about which service is running right now. So this
+   * infers the line or stop you're near from real mapped data plus your
+   * own speed and heading, and estimates the *kind* of service that
+   * implies. It never claims a train number or bus run: that would need a
+   * live timetable feed, which needs a backend and an operator's API key,
+   * and inventing one from a plausible guess would be worse than saying so.
+   * Rails and roads aren't the same kind of evidence, though: being on
+   * tracks is close to unambiguous, while being near a bus stop just means
+   * a stop is near — so rail always takes priority when both are found,
+   * and a bus guess never claims to be as sure as a rail one. */
 
   var RAILWAY_TILES = 'https://tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png';
 
@@ -729,6 +735,12 @@
   var TRAIN_QUERY_INTERVAL = 60000;
   var TRAIN_QUERY_DISTANCE = 500;
   var OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+
+  // Buses run on ordinary roads, so there's no equivalent of "on the rails":
+  // the closest honest signal is standing right by a stop. This is deliberately
+  // tight, close to GPS accuracy in a street, so it doesn't fire for someone
+  // merely walking down the same street as a stop.
+  var BUS_STOP_RANGE = 150;
 
   // Rails that carry a service worth naming, scored so a running line beats
   // the sidings and yard tracks that sit alongside it in every station.
@@ -782,6 +794,32 @@
     var moving = speedMps != null && speedMps > 8; // ~30 km/h, past tram-in-traffic
     if (named && moving && stops.length) return 'high';
     if (named && (moving || stops.length)) return 'medium';
+    return 'low';
+  }
+
+  // route_ref lists the route numbers a stop serves, semicolon- or
+  // comma-separated. It's the one honestly-taggable fact OSM offers about
+  // buses near you — there's no OSM equivalent of "which one you're on".
+  function uniqueRouteRefs(nodes) {
+    var seen = {}, out = [];
+    nodes.forEach(function (n) {
+      var ref = n.tags && n.tags.route_ref;
+      if (!ref) return;
+      ref.split(/[;,]/).forEach(function (part) {
+        var r = part.trim();
+        if (r && !seen[r]) { seen[r] = true; out.push(r); }
+      });
+    });
+    return out;
+  }
+
+  /* Capped below rail's ceiling on purpose: a named line under you at train
+   * speed is about as sure as this gets, but standing near a bus stop never
+   * rules out just standing there — so this can say "likely", never
+   * "confident". */
+  function busConfidence(routes, speedMps, stops) {
+    var moving = speedMps != null && speedMps > 2.5; // faster than a stroll
+    if (routes.length && moving && stops.length) return 'medium';
     return 'low';
   }
 
@@ -870,15 +908,19 @@
     state.train.queryAt = Date.now();
     state.train.queryPoint = { lat: lat, lng: lng };
 
-    // Two named sets so each gets its own result cap — without that, a dense
-    // city's stations could crowd the track we're actually standing on out
-    // of a shared limit.
+    // Three named sets so each gets its own result cap — without that, a
+    // dense city's stations could crowd the track we're actually standing
+    // on out of a shared limit. Bus stops get a shorter radius than rail
+    // stations: they're far denser, and a bus's useful "ahead" horizon is
+    // shorter than a train's.
     var query = '[out:json][timeout:25];' +
       'way(around:80,' + lat + ',' + lng + ')' +
       '["railway"~"^(rail|light_rail|subway|tram|narrow_gauge|monorail)$"]->.tracks;' +
       'node(around:15000,' + lat + ',' + lng + ')["railway"~"^(station|halt)$"]["name"]->.stops;' +
+      'node(around:3000,' + lat + ',' + lng + ')["highway"="bus_stop"]->.busstops;' +
       '.tracks out tags 12;' +
-      '.stops out 150;';
+      '.stops out 150;' +
+      '.busstops out tags 200;';
 
     fetch(OVERPASS_URL, {
       method: 'POST',
@@ -893,13 +935,38 @@
         var elements = (data && data.elements) || [];
         var ways = elements.filter(function (e) { return e.type === 'way'; });
         var stations = elements.filter(function (e) {
-          return e.type === 'node' && e.tags && e.tags.name && e.lat != null;
+          return e.type === 'node' && e.tags && e.tags.name && e.lat != null && e.tags.railway;
         }).map(function (e) {
           return { name: e.tags.name, lat: e.lat, lng: e.lon, railway: e.tags.railway };
         });
+        var busStops = elements.filter(function (e) {
+          return e.type === 'node' && e.tags && e.tags.highway === 'bus_stop' && e.lat != null;
+        });
 
         state.train.track = pickTrack(ways);
-        state.train.stations = stations;
+        if (state.train.track) {
+          // Rails win when both are present: being physically on tracks
+          // within 80 m is close to unambiguous, while a bus stop nearby
+          // just means a stop is nearby, not that you're riding anything.
+          state.train.mode = 'rail';
+          state.train.stations = stations;
+          state.train.busRoutes = [];
+        } else {
+          var here = { lat: lat, lng: lng };
+          var nearStops = busStops.filter(function (e) {
+            return distance(here, { lat: e.lat, lng: e.lon }) < BUS_STOP_RANGE;
+          });
+          if (nearStops.length) {
+            state.train.mode = 'bus';
+            state.train.stations = busStops.filter(function (e) { return e.tags.name; })
+              .map(function (e) { return { name: e.tags.name, lat: e.lat, lng: e.lon }; });
+            state.train.busRoutes = uniqueRouteRefs(nearStops);
+          } else {
+            state.train.mode = null;
+            state.train.stations = [];
+            state.train.busRoutes = [];
+          }
+        }
         state.train.failed = false;
         // Cleared before rendering, not in a .finally() afterwards: the
         // render reads this flag to decide between "still looking" and
@@ -937,6 +1004,8 @@
       state.train.queryAt = 0;
       state.train.chosenBearing = null;
       state.train.stopPattern = 'all';
+      state.train.mode = null;
+      state.train.busRoutes = [];
       if (state.prefs.activeTab === 'train') {
         activateTab('now');
         state.prefs.activeTab = 'now';
@@ -985,9 +1054,10 @@
     var c = state.position && state.position.coords;
     var speed = c ? c.speed : null;
     var tags = state.train.track;
+    var mode = state.train.mode;
     var here = c ? { lat: c.latitude, lng: c.longitude } : null;
 
-    var known = !!tags;
+    var known = mode === 'rail' || mode === 'bus';
     $('train-card').hidden = !known;
     $('train-status').hidden = known;
     $('train-filter').hidden = !(known && here);
@@ -1000,15 +1070,28 @@
     state.train.stops = stops;
 
     if (known) {
-      var service = estimateService(tags, speed);
-      var confidence = trainConfidence(tags, speed, stops);
+      var service, confidence;
+      if (mode === 'rail') {
+        service = estimateService(tags, speed);
+        confidence = trainConfidence(tags, speed, stops);
+      } else {
+        service = 'train.svcBus';
+        confidence = busConfidence(state.train.busRoutes, speed, stops);
+      }
       $('train-service').textContent = t(service);
       $('train-confidence').textContent = t('train.confidence' +
         confidence.charAt(0).toUpperCase() + confidence.slice(1));
       $('train-confidence').dataset.level = confidence;
 
-      var lineName = tags.name || tags.ref;
-      $('train-line').textContent = lineName ? t('train.onLine', { line: lineName }) : t('train.unnamedLine');
+      if (mode === 'rail') {
+        var lineName = tags.name || tags.ref;
+        $('train-line').textContent = lineName ? t('train.onLine', { line: lineName }) : t('train.unnamedLine');
+      } else {
+        var routes = state.train.busRoutes;
+        $('train-line').textContent = routes.length
+          ? t('train.busRoutesNear', { routes: routes.join(', ') })
+          : t('train.busRoutesNone');
+      }
       $('train-line').hidden = false;
 
       // The interactive filter: the robot asks which way, then — once it
@@ -1027,7 +1110,9 @@
         $('train-ask').textContent = t('train.confirmNoStops');
       }
 
-      $('train-pattern').hidden = !haveDir;
+      // The stopping-pattern filter only makes sense for rail: OSM has no
+      // honest basis for "this bus skips stops" the way railway=halt does.
+      $('train-pattern').hidden = !haveDir || mode !== 'rail';
       $('train-pattern-all').classList.toggle('is-active', state.train.stopPattern !== 'fast');
       $('train-pattern-fast').classList.toggle('is-active', state.train.stopPattern === 'fast');
 

@@ -31,7 +31,7 @@ reload.
 The map itself carries a single control: a settings gear in the top corner.
 Tapping it spins the gear a half turn and cascades the rest out beneath it —
 the map controls (zoom, recenter, heading-up, full screen) and, in a small
-glass card, the app's own settings: its accent **colour** and the **train
+glass card, the app's own settings: its accent **colour** and the **transit
 mode** toggle. Tapping again winds the same rotation back the other way and
 folds them away. The rotation is a plain transition between two angles rather
 than a keyframe animation, which is what makes the closing spin run backwards
@@ -131,46 +131,58 @@ request says so rather than silently doing nothing; unlike the automatic
 street lookup, this only ever runs from an explicit submit, so it needs no
 rate-limiting of its own.
 
-**Train** — a mode for riding the rails, off by default and toggled from the
-settings gear. Switching it on paints every railway on the map (OpenRailwayMap's
-overlay, drawn over whichever basemap you're using) and adds a **Train** tab
-that works out what you're travelling on:
+**Transit** — a mode for riding rail *or* the bus, off by default and toggled
+from the settings gear. Switching it on paints every railway on the map
+(OpenRailwayMap's overlay, drawn over whichever basemap you're using) and adds
+a **Transit** tab that works out what you're travelling on:
 
 - **The track under you.** A small Overpass query finds the railways within
   80 m and picks the one you're plausibly running on — sidings, yards and
   crossovers score *down* precisely because every station is full of them,
   so a named main line wins over the spur beside it.
-- **The kind of service.** Track class settles most of it (a subway tunnel
-  is never an intercity), with your speed breaking the remaining tie between
-  long-distance and regional on shared main line.
-- **Where you're going.** Stations within 15 km, filtered to those ahead of
-  you and sorted nearest-first, with distance and an ETA from your current
-  speed. Heading comes from the GPS when it reports one and from consecutive
-  fixes when it doesn't.
+- **Or the stop beside you.** Buses run on ordinary roads, so there's no
+  equivalent of "on the rails" — the closest honest signal is standing right
+  by a stop. If no track is under you but a mapped bus stop is within 150 m,
+  the app switches to bus mode and reads that stop's `route_ref` tag for the
+  routes it actually knows serve it: **Routes near you: 100, 200** — never a
+  guess at which one you're on, and it says so plainly when a stop has no
+  route numbers tagged at all. Rails always take priority when both are
+  found: being physically on tracks is close to unambiguous, while a bus stop
+  nearby just means a stop is nearby.
+- **The kind of service.** For rail, track class settles most of it (a subway
+  tunnel is never an intercity), with your speed breaking the remaining tie
+  between long-distance and regional on shared main line.
+- **Where you're going.** For rail, stations within 15 km; for buses, stops
+  within 3 km — filtered to those ahead of you and sorted nearest-first, with
+  distance and an ETA from your current speed. Heading comes from the GPS
+  when it reports one and from consecutive fixes when it doesn't.
 - **A filter that asks, when it can't tell.** Deriving a heading needs you to
   be moving, so the rest of the time — sitting on a platform, or a train that
   hasn't pulled away yet — the app can't know which way you'll go. Rather than
   guess, it asks: **Which way are you heading?**, offering the two ends of the
-  line (each labelled by its furthest station) as buttons. Picking one fixes
-  the direction, and the whole question turns into a confirmation — *Is this
-  your train? Heading towards X — check the stops below match* — so you narrow
-  it down by reading the real stops against the real train rather than trusting
-  a silent guess. A second toggle, **All stops** vs **Fast**, drops the minor
-  halts an express skips, which is often the difference between two services on
-  the same line.
+  line or route (each labelled by its furthest station or stop) as buttons.
+  Picking one fixes the direction, and the whole question turns into a
+  confirmation — *Is this your train? Heading towards X — check the stops
+  below match* — so you narrow it down by reading the real stops against the
+  real vehicle rather than trusting a silent guess. On rail, a second toggle,
+  **All stops** vs **Fast**, drops the minor halts an express skips, which is
+  often the difference between two services on the same line; it stays hidden
+  for buses, since OSM has no equivalent tag for "this route skips stops."
 
-**What it deliberately does not do is name your train.** OpenStreetMap
+**What it deliberately does not do is name your train or bus.** OpenStreetMap
 describes infrastructure — where rails run, what a line is called, which
-stations sit on it. It says nothing about which service is running on those
-rails right now. Identifying *your* train as a specific numbered service
-needs a live timetable feed, which needs a backend and an operator's API
-key; guessing a plausible-looking train number instead would be worse than
-saying so. The estimate is labelled with its own confidence — **confident**
-when a named line, train-like speed and stations lining up ahead all agree,
-down to **rough guess** when they don't.
+stations and stops sit where. It says nothing about which service is running
+right now. Identifying a specific numbered service needs a live timetable
+feed, which needs a backend and an operator's API key; guessing a
+plausible-looking number instead would be worse than saying so. The estimate
+is labelled with its own confidence — up to **confident** on rail, when a
+named line, train-like speed and stations lining up ahead all agree, down to
+**rough guess** when they don't. A bus guess is capped lower on purpose: it
+can reach **likely**, never **confident**, because standing near a stop never
+rules out just standing there.
 
 Overpass is a small, donation-funded, heavily-loaded shared service, so the
-queries are frugal on purpose: only while train mode is on, at most once a
+queries are frugal on purpose: only while transit mode is on, at most once a
 minute, and only once you've moved 500 m — comfortably inside its usage
 policy rather than polling it on every fix.
 
@@ -276,10 +288,11 @@ which are minimal enough that your position and track stay the loudest things on
 screen. Having a real dark basemap beats inverting a light one: inversion gets
 the ground right but turns every label into a photographic negative.
 
-Train mode adds a second raster layer on top: [OpenRailwayMap](https://www.openrailwaymap.org)'s
-standard style, which draws the rails themselves. It's designed for a light
-background, so on the dark basemap it's brightened rather than left to sink
-into it.
+Transit mode adds a second raster layer on top: [OpenRailwayMap](https://www.openrailwaymap.org)'s
+standard style, which draws the rails themselves (bus routes have no equivalent
+free tile overlay, so buses are detected and listed but not drawn). It's
+designed for a light background, so on the dark basemap it's brightened
+rather than left to sink into it.
 
 Map data © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors,
 tiles © [CARTO](https://carto.com/attributions) and © [OpenRailwayMap](https://www.openrailwaymap.org).
@@ -346,8 +359,8 @@ never to a server of this app's own (there isn't one): map tile images (see
 below), naming the street you're on and finding current weather (both to
 OpenStreetMap's Nominatim and Open-Meteo respectively, and only for where
 you currently are), searching an address you typed (also Nominatim, sent
-only when you submit that search), and the railway lookup while **train
-mode** is on (to Overpass, at most once a minute). None of these run in the
+only when you submit that search), and the rail/bus-stop lookup while
+**transit mode** is on (to Overpass, at most once a minute). None of these run in the
 background beyond what's needed to keep the readout current; nothing about
 your history or habits accumulates anywhere but your own device. If you've
 set up sign-in, the one other thing that leaves the device is the
