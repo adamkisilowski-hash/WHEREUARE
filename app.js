@@ -88,6 +88,14 @@
 
   var map;
 
+  // Other modules (friends.js) hear about position updates through this
+  // rather than reaching into state directly — the one seam this app
+  // exposes across its otherwise-private per-file closures.
+  var positionListeners = [];
+  function notifyPositionListeners(point) {
+    positionListeners.forEach(function (fn) { fn(point); });
+  }
+
   /* ---------------------------------------------------------------- utils */
 
   function toRad(d) { return d * Math.PI / 180; }
@@ -1174,6 +1182,7 @@
     if (!state.train.prevPoint || distance(state.train.prevPoint, point) > 60) {
       state.train.prevPoint = { lat: point.lat, lng: point.lng };
     }
+    notifyPositionListeners({ lat: point.lat, lng: point.lng });
     syncHash();
   }
 
@@ -2131,5 +2140,23 @@
     }
   }
 
-  window.Whereabouts = { start: boot, started: false };
+  window.Whereabouts = {
+    start: boot,
+    started: false,
+    activateTab: activateTab,
+    formatDistance: formatDistance,
+    getPosition: function () {
+      var c = state.position && state.position.coords;
+      return c ? { lat: c.latitude, lng: c.longitude } : null;
+    },
+    onPosition: function (fn) { positionListeners.push(fn); },
+    setFriendMarker: function (id, lat, lng, label) {
+      if (!map) return;
+      var el = map.setMarker('friend:' + id, lat, lng, 'mm-marker-friend', label);
+      if (!el.textContent) el.textContent = (label || '?').charAt(0).toUpperCase();
+    },
+    removeFriendMarker: function (id) {
+      if (map) map.removeMarker('friend:' + id);
+    }
+  };
 })();

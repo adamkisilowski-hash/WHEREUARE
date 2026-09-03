@@ -52,6 +52,8 @@
         <button id="auth-forgot" class="link-btn" type="button" data-i18n="auth.forgotPassword">Forgot password?</button>
       </div>
     </form>
+
+    <button id="auth-guest" class="link-btn auth-guest" type="button" data-i18n="auth.continueAsGuest">Continue as guest</button>
   </div>
 </div>
 
@@ -154,6 +156,7 @@
         <button id="account-avatar" class="avatar-btn" hidden aria-haspopup="true" aria-expanded="false" aria-controls="account-menu" data-i18n-title="account.account">
           <span id="account-initial"></span>
         </button>
+        <button id="guest-badge" class="ghost-btn" type="button" hidden data-i18n="account.guestSignIn" data-i18n-title="account.guestSignInTitle">Guest · Sign in</button>
       </div>
 
       <div id="account-menu" class="account-menu" role="menu" hidden>
@@ -168,6 +171,7 @@
       <button class="tab" role="tab" aria-selected="false" data-tab="trip" data-i18n="nav.trip">Trip</button>
       <button class="tab" role="tab" aria-selected="false" data-tab="places" data-i18n="nav.places">Places</button>
       <button id="tab-train" class="tab" role="tab" aria-selected="false" data-tab="train" data-i18n="nav.train" hidden>Transit</button>
+      <button id="tab-friends" class="tab" role="tab" aria-selected="false" data-tab="friends" data-i18n="nav.friends" hidden>Friends</button>
     </nav>
 
     <section class="tab-panel is-active" data-panel="now" role="tabpanel">
@@ -294,6 +298,42 @@
       <p class="muted train-disclaimer" data-i18n="train.disclaimer">Estimated from OpenStreetMap's railway and bus-stop data and your own speed and heading — not a timetable lookup, so it names the line or nearby routes, never a specific train number or bus run.</p>
     </section>
 
+    <section class="tab-panel" data-panel="friends" role="tabpanel">
+      <button id="friends-share-toggle" class="ms-train" type="button" data-i18n-title="friends.shareTitle">
+        <span class="ms-train-label"><span class="ms-train-icon" aria-hidden="true">📍</span><span data-i18n="friends.shareLabel">Share my location</span></span>
+        <span id="friends-share-state" class="ms-train-state">off</span>
+      </button>
+      <p class="muted friends-share-hint" data-i18n="friends.shareHint">Friends can only see your location while this is on — turn it off and they immediately stop seeing anything new.</p>
+
+      <form id="friends-add-form" class="friends-add">
+        <label class="auth-field">
+          <span data-i18n="friends.addLabel">Add a friend by email</span>
+          <input id="friends-add-email" type="email" required placeholder="friend@example.com">
+        </label>
+        <button id="friends-add-submit" class="btn btn-primary btn-wide" type="submit" data-i18n="friends.addSubmit">Send request</button>
+      </form>
+      <p id="friends-add-error" class="auth-error" role="alert" hidden></p>
+      <p id="friends-add-status" class="auth-status" role="status" hidden></p>
+
+      <div id="friends-incoming" class="friends-section" hidden>
+        <h2 class="train-stops-head" data-i18n="friends.incoming">Friend requests</h2>
+        <ul id="friends-incoming-list" class="friends-list"></ul>
+      </div>
+
+      <div id="friends-outgoing" class="friends-section" hidden>
+        <h2 class="train-stops-head" data-i18n="friends.outgoing">Sent requests</h2>
+        <ul id="friends-outgoing-list" class="friends-list"></ul>
+      </div>
+
+      <div class="friends-section">
+        <h2 class="train-stops-head" data-i18n="friends.yourFriends">Your friends</h2>
+        <ul id="friends-list" class="friends-list"></ul>
+        <p id="friends-empty" class="muted" data-i18n="friends.empty">No friends yet — add one by email above.</p>
+      </div>
+
+      <p class="muted train-disclaimer" data-i18n="friends.disclaimer">A friend only ever sees your location while your own Share toggle is on. Turning it off, or removing a friend, stops it immediately — nothing is kept once sharing stops.</p>
+    </section>
+
     <footer class="panel-foot">
       <span class="foot-controls">
         <button id="unit-toggle" class="ghost-btn">metric</button>
@@ -312,5 +352,6 @@
 <script src="map.js"></script>
 <script src="app.js"></script>
 <script type="module" src="auth.js"></script>
+<script type="module" src="friends.js"></script>
 </body>
 </html>

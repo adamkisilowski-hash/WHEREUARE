@@ -1,0 +1,95 @@
+// Whereabouts — Firestore security rules for the "find my friends" feature.
+//
+// This is not applied automatically — Claude Code has no access to your
+// Firebase console. To turn friends on:
+//   1. Firebase console → your project → Build → Firestore Database →
+//      Create database (Native mode, any region) if you haven't already.
+//   2. Firestore Database → Rules tab → replace the contents with this file
+//      → Publish.
+// Until you do, every read and write friends.js attempts is denied, and the
+// app quietly behaves as if the feature weren't there — see friends.js's own
+// top comment for why that's the deliberate fallback rather than a crash.
+//
+// What each collection is for, and why the rule is shaped the way it is:
+//
+// emailIndex/{emailLower} -> { uid }
+//   Lets "add a friend by email" resolve an email to a uid without ever
+//   exposing a list of every registered user — only `get` is allowed
+//   (fetch by exact, already-known id), never `list`, and creating your own
+//   entry requires Firebase Auth's own verified token email to match the
+//   document id, so nobody can claim an email that isn't theirs.
+//
+// friendRequests/{id} -> { from, fromEmail, to, toEmail, status, createdAt }
+//   Readable only by the two people it names. The sender creates it
+//   pending; only the recipient can change its status (accept/decline).
+//
+// friendships/{pairId} -> { uids: [a, b], emails: {a: ..., b: ...}, createdAt }
+//   pairId is the two uids sorted and joined with "_", computed identically
+//   by the client and by these rules, so both sides land on the same
+//   document without coordinating. Readable and deletable by either party.
+//   Note: creation only checks that you're one of the two uids named, not
+//   that a real accepted request preceded it — acceptable for a
+//   friends-and-family app, since the worst case is an uninvited "friend"
+//   who can be removed with one tap, not a data leak.
+//
+// locations/{uid} -> { lat, lng, sharing, updatedAt }
+//   The only place a live location lives. Always writable by its own owner;
+//   readable by its owner or by anyone with a friendships document naming
+//   both uids. There's no separate "am I sharing" check in the read rule —
+//   sharing:false and the absence of a document look the same to a friend
+//   because the client only ever renders a marker when sharing is true.
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function pairId(a, b) {
+      return a < b ? a + '_' + b : b + '_' + a;
+    }
+
+    match /emailIndex/{emailLower} {
+      allow get: if isSignedIn();
+      allow list: if false;
+      allow create, update: if isSignedIn()
+        && request.auth.uid == request.resource.data.uid
+        && request.auth.token.email.lower() == emailLower;
+      allow delete: if false;
+    }
+
+    match /friendRequests/{requestId} {
+      allow read: if isSignedIn()
+        && (request.auth.uid == resource.data.from || request.auth.uid == resource.data.to);
+      allow create: if isSignedIn()
+        && request.auth.uid == request.resource.data.from
+        && request.resource.data.status == 'pending'
+        && request.auth.token.email == request.resource.data.fromEmail;
+      allow update: if isSignedIn()
+        && request.auth.uid == resource.data.to
+        && resource.data.status == 'pending';
+      allow delete: if isSignedIn()
+        && (request.auth.uid == resource.data.from || request.auth.uid == resource.data.to);
+    }
+
+    match /friendships/{pairIdParam} {
+      allow read: if isSignedIn() && request.auth.uid in resource.data.uids;
+      allow create: if isSignedIn()
+        && request.auth.uid in request.resource.data.uids
+        && request.resource.data.uids.size() == 2
+        && pairIdParam == pairId(request.resource.data.uids[0], request.resource.data.uids[1]);
+      allow delete: if isSignedIn() && request.auth.uid in resource.data.uids;
+      allow update: if false;
+    }
+
+    match /locations/{uid} {
+      allow read: if isSignedIn() && (
+        request.auth.uid == uid ||
+        exists(/databases/$(database)/documents/friendships/$(pairId(request.auth.uid, uid)))
+      );
+      allow write: if isSignedIn() && request.auth.uid == uid;
+    }
+  }
+}
