@@ -27,6 +27,37 @@
     }
   }
 
+  // Guest mode: use the app without an account at all, same as before
+  // sign-in existed, but as a deliberate choice rather than the only option.
+  // Remembered across reloads so a returning guest isn't dropped back behind
+  // the gate every time — but a real sign-in always wins over a stale guest
+  // flag, and signing out for real clears it rather than silently re-entering.
+  var GUEST_KEY = 'whereabouts.guest';
+  var guestMode = false;
+  try { guestMode = localStorage.getItem(GUEST_KEY) === '1'; } catch (e) {}
+
+  function enterGuestMode() {
+    guestMode = true;
+    try { localStorage.setItem(GUEST_KEY, '1'); } catch (e) {}
+    $('auth-gate').hidden = true;
+    $('app-root').hidden = false;
+    $('guest-badge').hidden = false;
+    startApp();
+  }
+
+  function exitGuestMode() {
+    guestMode = false;
+    try { localStorage.removeItem(GUEST_KEY); } catch (e) {}
+    // A full reload, same as signing out for real — the simplest reliable
+    // way back to a clean gate.
+    location.reload();
+  }
+
+  var guestBtn = $('auth-guest');
+  if (guestBtn) guestBtn.addEventListener('click', enterGuestMode);
+  var guestBadge = $('guest-badge');
+  if (guestBadge) guestBadge.addEventListener('click', exitGuestMode);
+
   // Sign-in isn't set up — behave exactly as this app did before accounts
   // existed, rather than showing a gate nobody can get past.
   if (!configured) {
@@ -35,6 +66,8 @@
     startApp();
     return;
   }
+
+  if (guestMode) enterGuestMode();
 
   run();
 
@@ -188,12 +221,20 @@
 
     fbAuth.onAuthStateChanged(auth, function (user) {
       if (user) {
+        // A real sign-in always wins over a leftover guest flag.
+        guestMode = false;
+        try { localStorage.removeItem(GUEST_KEY); } catch (e) {}
+        $('guest-badge').hidden = true;
         $('auth-gate').hidden = true;
         $('app-root').hidden = false;
         $('account-avatar').hidden = false;
         $('account-initial').textContent = (user.email || '?').charAt(0).toUpperCase();
         $('account-menu-email').textContent = user.email;
         startApp();
+      } else if (guestMode) {
+        // Already showing the app as a guest (entered above, or restored
+        // from a previous session) — nothing to do, and critically, don't
+        // fall through to showing the gate.
       } else {
         $('app-root').hidden = true;
         $('account-avatar').hidden = true;

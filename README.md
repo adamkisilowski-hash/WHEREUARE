@@ -256,12 +256,15 @@ Five source files plus a small set of icon assets, no dependencies, no toolchain
   for the accuracy circle and the recorded track (drawn twice, casing under
   line, so it stays legible over any background)
 - `app.js` — geolocation, formatting, trip maths, storage, and UI wiring
-- `auth.js` — the sign-in gate; see **Accounts** below
+- `auth.js` — the sign-in gate and guest mode; see **Accounts** below
+- `friends.js` — find my friends; see **Find my friends** below
 - `i18n.js` — the English/German/Polish dictionary and the `t(key, vars)`
   lookup every other file calls for user-facing text; also walks the
   `data-i18n*` attributes in `index.html` to translate static markup, and
   re-applies on the fly when the language changes
 - `firebase-config.js` — your own Firebase project's config, if you set one up
+- `firestore.rules` — the security rules **Find my friends** needs published
+  to your Firebase project; irrelevant if you don't turn that feature on
 
 `MiniMap` exists so the app has no mapping-library dependency. It covers what
 this app needs — pan, integer zoom, markers, one circle, one polyline — and
@@ -337,6 +340,16 @@ from ever needing to touch the current password itself), and **Sign out**.
 Signing out reloads the page rather than trying to individually stop every
 running watch, poll, and timer — simpler, and just as immediate.
 
+**Guest mode.** Once sign-in is configured, the gate also offers **Continue
+as guest** — skip an account entirely and use the app exactly as it works
+unconfigured. The choice is remembered across reloads (so a returning guest
+isn't dropped behind the gate every time) via a small pill in the header,
+**Guest · Sign in**, that leads back to the gate whenever you want an
+account after all. A real sign-in always takes priority if one exists on the
+device. Guest mode has no identity to hand anyone else, so it can't use
+**Find my friends** below — that's the one feature an account actually
+buys you.
+
 **Scope, deliberately kept narrow:** signing in only gates access to the app
 itself. Saved places, trip history, and every preference still live only in
 `localStorage` on the device you're using, exactly as before — nothing about
@@ -345,7 +358,44 @@ different user on the same device, sees its own separate local data, not a
 shared account library. Syncing that data across devices would need a real
 database and security rules behind it — a meaningfully bigger project than
 authentication alone, and not something to take on silently as a side effect
-of adding a login screen.
+of adding a login screen. Firestore below is exactly that bigger project,
+scoped deliberately narrowly too: it exists only to back friend requests and
+opt-in location sharing, not to sync places or trips.
+
+## Find my friends
+
+Off by default, and invisible until you're signed in with a real account
+(guests and the unconfigured fallback never see it) — a **Friends** tab
+appears once you are, for adding friends by email and, once they've
+accepted, seeing where they are on the map.
+
+- **Add a friend by email.** Looks up that exact email — a single-document
+  read, never a browsable list of every registered user — and sends them a
+  request if an account exists for it.
+- **Accept, decline, or cancel.** Incoming and outgoing requests each show
+  in their own list; accepting turns a request into a mutual friendship,
+  which either side can end at any time by removing it.
+- **Share my location**, off by default, is a single toggle in the Friends
+  tab. While it's on, your current position is written (throttled to at most
+  once every 15 seconds) to a document only your accepted friends can read —
+  enforced by Firestore's security rules, not just by client code choosing
+  not to show it. Turning it off stops any friend from seeing anything new
+  immediately; nothing is kept once sharing stops.
+- Friends who are sharing appear as small labelled circles on the map,
+  distinct from your own accent-coloured dot and from saved-place pins, with
+  a live distance readout in the Friends tab as you both move.
+
+This needs a real backend — friend requests and live location sharing
+aren't something `localStorage` can do between two different people's
+devices — so it's built on [Firestore](https://firebase.google.com/docs/firestore),
+the same Firebase project **Accounts** already set up. Turning it on needs
+one extra manual step this app can't do for you: publish [`firestore.rules`](firestore.rules)
+to your project (Firebase console → Firestore Database → create it in
+Native mode if you haven't already → Rules tab → paste that file's contents
+→ Publish). Until you do, Firestore denies every read and write here by
+default, and the app behaves as if the feature weren't there rather than
+erroring — see the comment at the top of `firestore.rules` for exactly what
+each rule allows and why.
 
 ## Privacy
 
@@ -365,5 +415,9 @@ background beyond what's needed to keep the readout current; nothing about
 your history or habits accumulates anywhere but your own device. If you've
 set up sign-in, the one other thing that leaves the device is the
 email/password you register or sign in with, sent to Firebase to
-authenticate you. If tiles can't load, the app says so and everything except
-the map imagery keeps working.
+authenticate you. If you turn on **Share my location** in the Friends tab,
+your coordinates are also written to Firestore (at most once every 15
+seconds) for as long as that toggle stays on — readable only by you and the
+friends you've accepted, per `firestore.rules`, never by this app's own
+server, because there isn't one. If tiles can't load, the app says so and
+everything except the map imagery keeps working.
