@@ -1,31 +1,33 @@
 /* Whereabouts — styles.
- * Light palette on :root, dark overrides in one place. The map is always
- * full-bleed; a single Liquid-Glass bottom sheet overlays it at every
+ * "Wayfarer": a warm, editorial travel-poster palette — cream paper and
+ * burnt terracotta in place of the cool SaaS blue-and-grey this app started
+ * with. Light palette on :root, dark overrides in one place. The map is
+ * always full-bleed; a single Liquid-Glass bottom sheet overlays it at every
  * screen size, collapsed to a minimal bar by default.
  */
 
 :root {
-  --bg: #f5f6f8;
-  --surface: #ffffff;
-  --surface-2: #f0f2f5;
-  --border: #e0e3e9;
-  --text: #14171c;
-  --text-dim: #626b78;
-  --accent: #2563eb;
-  --accent-soft: rgba(37, 99, 235, 0.12);
+  --bg: #f7f2e9;
+  --surface: #fffbf3;
+  --surface-2: #efe6d6;
+  --border: #e2d6bf;
+  --text: #2a1f14;
+  --text-dim: #8a7a63;
+  --accent: #c1440e;
+  --accent-soft: rgba(193, 68, 14, 0.13);
   --accent-text: #ffffff;
-  --danger: #c9382f;
-  --good: #17794c;
-  --warn-text-strong: #9a6100;
-  --warn-bg: #fff4d6;
-  --warn-text: #6b4c00;
-  --error-bg: #fde3e1;
-  --error-text: #8a221b;
-  --glass: rgba(255, 255, 255, 0.82);
-  --glass-hover: rgba(255, 255, 255, 0.96);
-  --glass-border: rgba(15, 23, 42, 0.10);
-  --shadow: 0 1px 2px rgba(15, 23, 42, 0.08), 0 8px 24px rgba(15, 23, 42, 0.08);
-  --radius: 12px;
+  --danger: #b3261e;
+  --good: #2f6b46;
+  --warn-text-strong: #8a5a00;
+  --warn-bg: #f7e6c0;
+  --warn-text: #5c3d00;
+  --error-bg: #f8dfd9;
+  --error-text: #7a241a;
+  --glass: rgba(255, 251, 243, 0.82);
+  --glass-hover: rgba(255, 251, 243, 0.96);
+  --glass-border: rgba(42, 31, 20, 0.10);
+  --shadow: 0 1px 2px rgba(42, 31, 20, 0.10), 0 10px 28px rgba(42, 31, 20, 0.10);
+  --radius: 14px;
   --sheet-max-w: 420px;
   --sheet-collapsed-h: 68px;
 }
@@ -37,50 +39,50 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0d1117;
-    --surface: #161b22;
-    --surface-2: #1c232c;
-    --border: #2a3038;
-    --text: #e6edf3;
-    --text-dim: #8b95a1;
-    --accent: #4d8bff;
-    --accent-soft: rgba(77, 139, 255, 0.18);
-    --accent-text: #06101f;
-    --danger: #f0736a;
-    --good: #4fc285;
-    --warn-text-strong: #e3ab55;
-    --warn-bg: #3d3111;
-    --warn-text: #f2d488;
-    --error-bg: #45201d;
-    --error-text: #ffb4ad;
-    --glass: rgba(22, 27, 34, 0.78);
-    --glass-hover: rgba(28, 35, 44, 0.94);
-    --glass-border: rgba(255, 255, 255, 0.12);
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.45);
+    --bg: #1b140d;
+    --surface: #241b12;
+    --surface-2: #2e2216;
+    --border: #40311f;
+    --text: #f4ecdd;
+    --text-dim: #ab9a80;
+    --accent: #e8834a;
+    --accent-soft: rgba(232, 131, 74, 0.20);
+    --accent-text: #1b140d;
+    --danger: #f0806f;
+    --good: #6fbf8a;
+    --warn-text-strong: #e6b567;
+    --warn-bg: #3d2c12;
+    --warn-text: #f2d9a0;
+    --error-bg: #402019;
+    --error-text: #ffb2a0;
+    --glass: rgba(36, 27, 18, 0.80);
+    --glass-hover: rgba(46, 34, 22, 0.94);
+    --glass-border: rgba(255, 244, 230, 0.12);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 10px 28px rgba(0, 0, 0, 0.5);
   }
 }
 
 :root[data-theme="dark"] {
-  --bg: #0d1117;
-  --surface: #161b22;
-  --surface-2: #1c232c;
-  --border: #2a3038;
-  --text: #e6edf3;
-  --text-dim: #8b95a1;
-  --accent: #4d8bff;
-  --accent-soft: rgba(77, 139, 255, 0.18);
-  --accent-text: #06101f;
-  --danger: #f0736a;
-  --good: #4fc285;
-  --warn-text-strong: #e3ab55;
-  --warn-bg: #3d3111;
-  --warn-text: #f2d488;
-  --error-bg: #45201d;
-  --error-text: #ffb4ad;
-  --glass: rgba(22, 27, 34, 0.78);
-  --glass-hover: rgba(28, 35, 44, 0.94);
-  --glass-border: rgba(255, 255, 255, 0.12);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.45);
+  --bg: #1b140d;
+  --surface: #241b12;
+  --surface-2: #2e2216;
+  --border: #40311f;
+  --text: #f4ecdd;
+  --text-dim: #ab9a80;
+  --accent: #e8834a;
+  --accent-soft: rgba(232, 131, 74, 0.20);
+  --accent-text: #1b140d;
+  --danger: #f0806f;
+  --good: #6fbf8a;
+  --warn-text-strong: #e6b567;
+  --warn-bg: #3d2c12;
+  --warn-text: #f2d9a0;
+  --error-bg: #402019;
+  --error-text: #ffb2a0;
+  --glass: rgba(36, 27, 18, 0.80);
+  --glass-hover: rgba(46, 34, 22, 0.94);
+  --glass-border: rgba(255, 244, 230, 0.12);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 10px 28px rgba(0, 0, 0, 0.5);
 }
 
 * { box-sizing: border-box; }
@@ -169,9 +171,16 @@ body {
 
 .auth-brand h1 {
   margin: 0;
-  font-size: 19px;
+  font-family: 'Fraunces', ui-serif, Georgia, serif;
+  font-size: 22px;
   font-weight: 650;
   letter-spacing: -0.01em;
+}
+
+.auth-ticket-rule {
+  border: none;
+  border-top: 1.5px dashed var(--border);
+  margin: 4px 0 18px;
 }
 
 .auth-form {
@@ -340,7 +349,8 @@ body {
 
 .panel-head h1 {
   margin: 0;
-  font-size: 18px;
+  font-family: 'Fraunces', ui-serif, Georgia, serif;
+  font-size: 20px;
   font-weight: 650;
   letter-spacing: -0.01em;
 }

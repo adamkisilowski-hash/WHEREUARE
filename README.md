@@ -5,6 +5,20 @@ where you go, and remembers the places you save — with no server and no build
 step. An account is entirely optional (see **Accounts** below) and off by
 default; nothing about it is required to use the app.
 
+## Design
+
+"Wayfarer" — warm cream and paper tones instead of a cool SaaS grey, burnt
+terracotta as the default accent instead of blue, and a serif display face
+(Fraunces, loaded from Google Fonts, falling back to Georgia if it can't
+reach the CDN) on the "Whereabouts" wordmark for a travel-poster feel rather
+than an app-store one. Every colour is a CSS custom property on `:root` in
+`styles.css` (light values there, dark overrides in one place right below),
+so retheming again is a token edit, not a hunt through selectors — the same
+system that already lets anyone override the accent entirely from the
+settings gear. The nine accent presets were refreshed to a coordinated
+earth-tone set to match, rather than leaving the old cool-toned defaults
+sitting oddly next to the new palette.
+
 ## Running it
 
 Geolocation requires a secure context, so `file://` won't work. Serve the folder
@@ -273,7 +287,7 @@ deliberately not much else.
 ## Icon
 
 `favicon.svg` is the source of truth — a white bullseye on the app's own accent
-blue, echoing the "you are here" marker drawn on the map itself, so the tab
+terracotta, echoing the "you are here" marker drawn on the map itself, so the tab
 icon and the home-screen icon are recognizably the same app. Every raster size
 (`favicon-16/32/48.png`, `apple-touch-icon.png`, `icon-192/512.png`, and a
 maskable 512 for Android's adaptive-icon safe zone) is rendered from that one
