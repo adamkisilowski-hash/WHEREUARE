@@ -7,17 +7,29 @@ default; nothing about it is required to use the app.
 
 ## Design
 
-"Wayfarer" — warm cream and paper tones instead of a cool SaaS grey, burnt
-terracotta as the default accent instead of blue, and a serif display face
-(Fraunces, loaded from Google Fonts, falling back to Georgia if it can't
-reach the CDN) on the "Whereabouts" wordmark for a travel-poster feel rather
-than an app-store one. Every colour is a CSS custom property on `:root` in
+Strictly monochrome: black, white, and shades of grey, with a serif display
+face (Fraunces, loaded from Google Fonts, falling back to Georgia if it
+can't reach the CDN) on the "Whereabouts" wordmark for some character
+against the plainness. Every colour is a CSS custom property on `:root` in
 `styles.css` (light values there, dark overrides in one place right below),
 so retheming again is a token edit, not a hunt through selectors — the same
 system that already lets anyone override the accent entirely from the
-settings gear. The nine accent presets were refreshed to a coordinated
-earth-tone set to match, rather than leaving the old cool-toned defaults
-sitting oddly next to the new palette.
+settings gear (the nine presets there are now a plain black-to-light-grey
+ramp, though the native colour picker underneath still opens onto real
+colour for anyone who wants to override the house style for themselves).
+
+Status that would normally lean on colour — a form error, a low-confidence
+train guess, a coarse GPS fix, "recording" on the trip toggle — has none to
+use here, so each leans on a different, still-monochrome cue instead: an
+error gets a border and extra weight a plain status message doesn't; the
+train/bus confidence badge inverts to a solid fill only when it's actually
+confident; GPS precision fades from solid black/white (precise) to a faint
+grey (coarse) rather than green-to-red; and the "recording" trip button
+flips from filled to outlined instead of turning red. Emoji (weather icons,
+the transit toggle, the robot asking which way you're heading) render as
+fixed-colour glyphs no CSS property can reach, so those specific elements
+carry a `grayscale()` filter to desaturate them rather than leaving them as
+the one colourful thing on the screen.
 
 ## Running it
 
@@ -287,7 +299,7 @@ deliberately not much else.
 ## Icon
 
 `favicon.svg` is the source of truth — a white bullseye on the app's own accent
-terracotta, echoing the "you are here" marker drawn on the map itself, so the tab
+black, echoing the "you are here" marker drawn on the map itself, so the tab
 icon and the home-screen icon are recognizably the same app. Every raster size
 (`favicon-16/32/48.png`, `apple-touch-icon.png`, `icon-192/512.png`, and a
 maskable 512 for Android's adaptive-icon safe zone) is rendered from that one

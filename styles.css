@@ -1,32 +1,33 @@
 /* Whereabouts — styles.
- * "Wayfarer": a warm, editorial travel-poster palette — cream paper and
- * burnt terracotta in place of the cool SaaS blue-and-grey this app started
- * with. Light palette on :root, dark overrides in one place. The map is
- * always full-bleed; a single Liquid-Glass bottom sheet overlays it at every
+ * Strictly monochrome: black, white, and shades of grey only, no exceptions
+ * — including status colour (errors, warnings, confidence levels), which
+ * lean on weight, borders, and fill-vs-outline instead of hue. Light
+ * palette on :root, dark overrides in one place. The map is always
+ * full-bleed; a single Liquid-Glass bottom sheet overlays it at every
  * screen size, collapsed to a minimal bar by default.
  */
 
 :root {
-  --bg: #f7f2e9;
-  --surface: #fffbf3;
-  --surface-2: #efe6d6;
-  --border: #e2d6bf;
-  --text: #2a1f14;
-  --text-dim: #8a7a63;
-  --accent: #c1440e;
-  --accent-soft: rgba(193, 68, 14, 0.13);
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f0f0f0;
+  --border: #dcdcdc;
+  --text: #111111;
+  --text-dim: #6e6e6e;
+  --accent: #000000;
+  --accent-soft: rgba(0, 0, 0, 0.08);
   --accent-text: #ffffff;
-  --danger: #b3261e;
-  --good: #2f6b46;
-  --warn-text-strong: #8a5a00;
-  --warn-bg: #f7e6c0;
-  --warn-text: #5c3d00;
-  --error-bg: #f8dfd9;
-  --error-text: #7a241a;
-  --glass: rgba(255, 251, 243, 0.82);
-  --glass-hover: rgba(255, 251, 243, 0.96);
-  --glass-border: rgba(42, 31, 20, 0.10);
-  --shadow: 0 1px 2px rgba(42, 31, 20, 0.10), 0 10px 28px rgba(42, 31, 20, 0.10);
+  --danger: #111111;
+  --good: #111111;
+  --warn-text-strong: #111111;
+  --warn-bg: #efefef;
+  --warn-text: #3a3a3a;
+  --error-bg: #e6e6e6;
+  --error-text: #111111;
+  --glass: rgba(255, 255, 255, 0.82);
+  --glass-hover: rgba(255, 255, 255, 0.96);
+  --glass-border: rgba(0, 0, 0, 0.10);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.10), 0 10px 28px rgba(0, 0, 0, 0.10);
   --radius: 14px;
   --sheet-max-w: 420px;
   --sheet-collapsed-h: 68px;
@@ -39,50 +40,50 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #1b140d;
-    --surface: #241b12;
-    --surface-2: #2e2216;
-    --border: #40311f;
-    --text: #f4ecdd;
-    --text-dim: #ab9a80;
-    --accent: #e8834a;
-    --accent-soft: rgba(232, 131, 74, 0.20);
-    --accent-text: #1b140d;
-    --danger: #f0806f;
-    --good: #6fbf8a;
-    --warn-text-strong: #e6b567;
-    --warn-bg: #3d2c12;
-    --warn-text: #f2d9a0;
-    --error-bg: #402019;
-    --error-text: #ffb2a0;
-    --glass: rgba(36, 27, 18, 0.80);
-    --glass-hover: rgba(46, 34, 22, 0.94);
-    --glass-border: rgba(255, 244, 230, 0.12);
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 10px 28px rgba(0, 0, 0, 0.5);
+    --bg: #0a0a0a;
+    --surface: #161616;
+    --surface-2: #202020;
+    --border: #383838;
+    --text: #f2f2f2;
+    --text-dim: #9a9a9a;
+    --accent: #ffffff;
+    --accent-soft: rgba(255, 255, 255, 0.14);
+    --accent-text: #0a0a0a;
+    --danger: #f2f2f2;
+    --good: #f2f2f2;
+    --warn-text-strong: #f2f2f2;
+    --warn-bg: #262626;
+    --warn-text: #d0d0d0;
+    --error-bg: #2b2b2b;
+    --error-text: #f2f2f2;
+    --glass: rgba(10, 10, 10, 0.80);
+    --glass-hover: rgba(20, 20, 20, 0.94);
+    --glass-border: rgba(255, 255, 255, 0.12);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 28px rgba(0, 0, 0, 0.55);
   }
 }
 
 :root[data-theme="dark"] {
-  --bg: #1b140d;
-  --surface: #241b12;
-  --surface-2: #2e2216;
-  --border: #40311f;
-  --text: #f4ecdd;
-  --text-dim: #ab9a80;
-  --accent: #e8834a;
-  --accent-soft: rgba(232, 131, 74, 0.20);
-  --accent-text: #1b140d;
-  --danger: #f0806f;
-  --good: #6fbf8a;
-  --warn-text-strong: #e6b567;
-  --warn-bg: #3d2c12;
-  --warn-text: #f2d9a0;
-  --error-bg: #402019;
-  --error-text: #ffb2a0;
-  --glass: rgba(36, 27, 18, 0.80);
-  --glass-hover: rgba(46, 34, 22, 0.94);
-  --glass-border: rgba(255, 244, 230, 0.12);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 10px 28px rgba(0, 0, 0, 0.5);
+  --bg: #0a0a0a;
+  --surface: #161616;
+  --surface-2: #202020;
+  --border: #383838;
+  --text: #f2f2f2;
+  --text-dim: #9a9a9a;
+  --accent: #ffffff;
+  --accent-soft: rgba(255, 255, 255, 0.14);
+  --accent-text: #0a0a0a;
+  --danger: #f2f2f2;
+  --good: #f2f2f2;
+  --warn-text-strong: #f2f2f2;
+  --warn-bg: #262626;
+  --warn-text: #d0d0d0;
+  --error-bg: #2b2b2b;
+  --error-text: #f2f2f2;
+  --glass: rgba(10, 10, 10, 0.80);
+  --glass-hover: rgba(20, 20, 20, 0.94);
+  --glass-border: rgba(255, 255, 255, 0.12);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 28px rgba(0, 0, 0, 0.55);
 }
 
 * { box-sizing: border-box; }
@@ -224,7 +225,9 @@ body {
 
 .auth-error[hidden], .auth-status[hidden] { display: none; }
 
-.auth-error { background: var(--error-bg); color: var(--error-text); }
+/* No colour to lean on for "this is more serious than a status note", so
+   the error gets a border and extra weight the plain status never does. */
+.auth-error { background: var(--error-bg); color: var(--error-text); border: 1px solid var(--text); font-weight: 600; }
 .auth-status { background: var(--accent-soft); color: var(--accent); }
 
 .auth-links {
@@ -324,7 +327,7 @@ body {
 }
 
 .account-menu-item:hover { background: var(--surface-2); }
-.account-menu-item-danger { color: var(--danger); }
+.account-menu-item-danger { color: var(--danger); font-weight: 600; }
 
 /* ------------------------------------------------------------- layout */
 
@@ -436,7 +439,10 @@ body {
   font-weight: 500;
 }
 
-.ms-train-icon { font-size: 15px; line-height: 1; }
+/* Emoji render as fixed-colour glyphs the CSS colour system can't reach —
+   grayscale() desaturates them at the pixel level instead, the one place
+   that's needed since every other icon here is already currentColor SVG. */
+.ms-train-icon { font-size: 15px; line-height: 1; filter: grayscale(1); }
 
 .ms-train-state {
   font-size: 12px;
@@ -673,15 +679,17 @@ body {
 .mm-marker-friend {
   /* A small labelled circle, distinct from both the pulsing accent-colour
      "you are here" dot and the currentColor place pins — a friend's marker
-     needs to read as neither. */
+     needs to read as neither. With no colour to spend on that, it's
+     inverted (outline, not fill) instead: the "me" dot is solid, this
+     isn't. */
   z-index: 1;
   width: 24px;
   height: 24px;
   margin: -12px 0 0 -12px;
   border-radius: 50%;
-  background: var(--good);
-  color: #fff;
-  border: 2px solid #fff;
+  background: var(--surface);
+  color: var(--text);
+  border: 2px solid var(--text);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25), 0 2px 8px rgba(0, 0, 0, 0.35);
   display: flex;
   align-items: center;
@@ -1047,6 +1055,8 @@ body.is-immersive .sheet { display: none; }
 .banner-error {
   background: var(--error-bg);
   color: var(--error-text);
+  border: 1px solid var(--text);
+  font-weight: 600;
 }
 
 .banner-close {
@@ -1175,13 +1185,16 @@ body.is-immersive .sheet { display: none; }
   background: var(--text-dim);
 }
 
-.precision[data-quality="precise"] { color: var(--good); }
-.precision[data-quality="precise"] .precision-dot { background: var(--good); }
+/* No hue to spend on this ladder, so it reads by shade instead: fainter
+   grey for a coarse fix, solid black/white for a precise one — darker (or
+   lighter, in dark mode) reads as more trustworthy either way. */
+.precision[data-quality="precise"] { color: var(--text); font-weight: 600; }
+.precision[data-quality="precise"] .precision-dot { background: var(--text); }
 .precision[data-quality="good"] .precision-dot { background: var(--accent); }
-.precision[data-quality="approx"] { color: var(--warn-text-strong); }
-.precision[data-quality="approx"] .precision-dot { background: var(--warn-text-strong); }
-.precision[data-quality="coarse"] { color: var(--danger); }
-.precision[data-quality="coarse"] .precision-dot { background: var(--danger); }
+.precision[data-quality="approx"] { color: color-mix(in srgb, var(--text) 70%, var(--bg)); }
+.precision[data-quality="approx"] .precision-dot { background: color-mix(in srgb, var(--text) 70%, var(--bg)); }
+.precision[data-quality="coarse"] { color: color-mix(in srgb, var(--text) 45%, var(--bg)); }
+.precision[data-quality="coarse"] .precision-dot { background: color-mix(in srgb, var(--text) 45%, var(--bg)); }
 
 .stats {
   display: grid;
@@ -1230,7 +1243,7 @@ body.is-immersive .sheet { display: none; }
   font-size: 13px;
 }
 
-.weather-icon { font-size: 16px; line-height: 1; }
+.weather-icon { font-size: 16px; line-height: 1; filter: grayscale(1); }
 .weather-text { font-weight: 500; }
 
 
@@ -1319,13 +1332,15 @@ body.is-immersive .sheet { display: none; }
 
 .btn-primary:hover { filter: brightness(1.08); }
 
+/* No red to mark "recording" against the plain filled button, so it
+   inverts instead — outline where the default is solid. */
 .btn-primary.is-active {
-  background: var(--danger);
-  border-color: var(--danger);
-  color: #fff;
+  background: var(--surface);
+  border-color: var(--text);
+  color: var(--text);
 }
 
-.btn-danger { color: var(--danger); }
+.btn-danger { color: var(--danger); font-weight: 600; }
 
 .btn-wide { width: 100%; }
 
@@ -1484,8 +1499,10 @@ body.is-immersive .sheet { display: none; }
   text-transform: lowercase;
 }
 
-.train-confidence[data-level="high"] { color: var(--good); }
-.train-confidence[data-level="low"] { opacity: 0.75; }
+/* A filled badge reads as more certain than an outlined one, no colour
+   needed — "confident" gets inverted to a solid fill, "rough guess" fades. */
+.train-confidence[data-level="high"] { background: var(--text); color: var(--bg); font-weight: 700; }
+.train-confidence[data-level="low"] { opacity: 0.65; }
 
 .train-line, .train-direction {
   margin: 6px 0 0;
@@ -1513,6 +1530,10 @@ body.is-immersive .sheet { display: none; }
   font-size: 13px;
   font-weight: 500;
   line-height: 1.35;
+  /* Carries an inline robot emoji from the translated string — desaturate
+     it the same way the other emoji-bearing icons are; no effect on the
+     already-monochrome text around it. */
+  filter: grayscale(1);
 }
 
 .train-directions[hidden] { display: none; }

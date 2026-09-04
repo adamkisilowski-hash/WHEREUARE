@@ -1579,7 +1579,7 @@
 
     // Matches --bg exactly, so the browser/OS chrome blends with the page
     // rather than the OS scheme and the in-app override disagreeing.
-    $('theme-color').setAttribute('content', prefersDark() ? '#1b140d' : '#f7f2e9');
+    $('theme-color').setAttribute('content', prefersDark() ? '#0a0a0a' : '#ffffff');
   }
 
   /* -------------------------------------------------------- accent colour */
@@ -1591,8 +1591,8 @@
    * both light and dark; the default (null) removes the override and lets
    * the theme-aware stylesheet value take back over. */
   var ACCENT_PRESETS = [
-    '#c1440e', '#c98a1f', '#2f6b46', '#0f8b8d',
-    '#2a5f8f', '#7a3b69', '#e0574a', '#6b7a3a', '#5b5346'
+    '#000000', '#262626', '#404040', '#595959',
+    '#737373', '#8c8c8c', '#a6a6a6', '#bfbfbf', '#d9d9d9'
   ];
 
   function hexToRgb(hex) {
@@ -1625,7 +1625,7 @@
     // dark text, while mid blues/greens/reds keep white — the conventional
     // pairing rather than the strict max-contrast one, which would put dark
     // text on a red button.
-    return L > 0.42 ? '#2a1f14' : '#ffffff';
+    return L > 0.42 ? '#111111' : '#ffffff';
   }
 
   function applyAccent() {
@@ -1668,7 +1668,7 @@
 
     $('accent-default').classList.toggle('is-active', !current);
     $('accent-default').style.color = getComputedStyle(document.documentElement)
-      .getPropertyValue('--accent').trim() || '#c1440e';
+      .getPropertyValue('--accent').trim() || '#000000';
 
     Array.prototype.forEach.call($('accent-presets').children, function (b) {
       b.classList.toggle('is-active', !!current && b.dataset.accent.toLowerCase() === current.toLowerCase());
