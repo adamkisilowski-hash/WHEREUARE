@@ -49,8 +49,10 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // Only accounts whose email address has been confirmed count as signed
+    // in, so a made-up address can never read or write anything here.
     function isSignedIn() {
-      return request.auth != null;
+      return request.auth != null && request.auth.token.email_verified == true;
     }
 
     function pairId(a, b) {

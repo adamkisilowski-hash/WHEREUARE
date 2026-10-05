@@ -34,6 +34,16 @@
     </div>
     <hr class="auth-ticket-rule" aria-hidden="true">
 
+    <div id="auth-verify" class="auth-verify" hidden>
+      <h2 data-i18n="auth.verify.title">Confirm your email</h2>
+      <p id="auth-verify-text" class="auth-verify-text"></p>
+      <p id="auth-verify-error" class="auth-error" role="alert" hidden></p>
+      <p id="auth-verify-status" class="auth-status" role="status" hidden></p>
+      <button id="auth-verify-done" class="btn btn-primary btn-wide" type="button" data-i18n="auth.verify.done">I've confirmed it</button>
+      <button id="auth-verify-resend" class="btn btn-wide" type="button" data-i18n="auth.verify.resend">Resend email</button>
+      <button id="auth-verify-other" class="link-btn" type="button" data-i18n="auth.verify.other">Use a different email</button>
+    </div>
+
     <form id="auth-form" class="auth-form">
       <p id="auth-error" class="auth-error" role="alert" hidden></p>
       <p id="auth-status" class="auth-status" role="status" hidden></p>

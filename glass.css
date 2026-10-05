@@ -202,25 +202,15 @@ body, button, input {
     inset 0 1.5px 0 var(--glass-edge),
     inset 0 -2px 4px var(--glass-edge-soft),
     inset 0 0 12px var(--glass-sheen);
-  transition:
-    transform 0.55s cubic-bezier(0.34, 1.45, 0.5, 1),
-    width 0.55s cubic-bezier(0.34, 1.45, 0.5, 1),
-    opacity 0.2s ease;
+  transition: opacity 0.2s ease;
   pointer-events: none;
-  will-change: transform, width;
-}
-
-.seg-pill.is-moving { animation: lens-stretch 0.5s ease; }
-
-@keyframes lens-stretch {
-  0% { scale: 1 1; }
-  35% { scale: 1.07 1.14; }
-  100% { scale: 1 1; }
+  will-change: transform, width, scale;
+  transform-origin: 50% 50%;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .seg-pill { transition: none; }
-  .seg-pill.is-moving { animation: none; }
+  .tab-panel.is-active { animation: none !important; }
 }
 
 /* ------------------------------------------------ controls inside */
@@ -541,3 +531,167 @@ input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px 
 
 .auth-logo::after { display: none; }
 .link-btn { color: var(--accent); }
+
+/* ---------------------------------------------- slider: touch feel */
+
+.tabs.seg .tab {
+  touch-action: manipulation;
+  transition: color 0.25s ease, transform 0.3s cubic-bezier(0.34, 1.5, 0.5, 1);
+}
+
+/* The active tab is the handle: dragging it must not scroll the bar. */
+.tabs.seg .tab.is-active { touch-action: none; cursor: grab; }
+.tabs.seg .tab.is-hot { color: var(--text); transform: scale(1.06); }
+.tabs.seg .tab:active:not(.is-active) { transform: scale(0.94); }
+.tabs.seg .tab.is-active { user-select: none; -webkit-user-select: none; }
+
+/* Panels glide in from the side the new tab sits on. */
+.tab-panel.is-active { animation: panel-fwd 0.42s cubic-bezier(0.2, 0.9, 0.25, 1) both; }
+.sheet-body[data-dir="back"] .tab-panel.is-active { animation-name: panel-back; }
+
+@keyframes panel-fwd {
+  from { opacity: 0; transform: translate3d(26px, 0, 0) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes panel-back {
+  from { opacity: 0; transform: translate3d(-26px, 0, 0) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Keep the big blurred sheet on its own GPU layer so the slider and the
+   expand/collapse stay at full frame rate on phones. */
+.sheet { will-change: max-height; transform: translate3d(-50%, 0, 0); }
+.seg-pill { backface-visibility: hidden; }
+
+/* ======================================================== minimal buttons
+ * Last word on every button: no gradients, no glow, no inner highlights, no
+ * borders unless they carry meaning. Flat fills, one weight, generous
+ * radius. The glass stays on the large surfaces; controls stay quiet. */
+
+.btn,
+.btn-primary,
+.btn-primary:hover,
+.btn-primary.is-active,
+.ghost-btn,
+.link-btn {
+  background-image: none;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  filter: none;
+}
+
+.btn {
+  padding: 11px 18px;
+  border: none;
+  border-radius: 14px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.btn:hover { background: color-mix(in srgb, var(--text) 14%, transparent); }
+.btn:active { transform: scale(0.98); background: color-mix(in srgb, var(--text) 18%, transparent); }
+
+.btn-primary,
+.btn-primary:hover {
+  border: none;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.btn-primary:hover { opacity: 0.92; }
+.btn-primary:active { opacity: 0.85; transform: scale(0.98); background: var(--accent); }
+
+.btn-primary.is-active {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.btn-danger { color: var(--text); font-weight: 500; }
+.btn[disabled], .btn-primary[disabled] { opacity: 0.45; pointer-events: none; }
+
+/* Small value buttons read as plain accent text, like a Settings row. */
+.ghost-btn {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.ghost-btn:hover { background: var(--surface-2); }
+.ghost-btn:active { transform: none; opacity: 0.6; }
+
+.set-row .ghost-btn { padding: 4px 0 4px 8px; }
+.set-row .ghost-btn:hover { background: none; opacity: 0.75; }
+
+.link-btn { color: var(--accent); font-weight: 500; }
+
+.vc-close, .banner-close, .place-del, .friend-del, .friend-edit {
+  border: none;
+  background: none;
+  box-shadow: none;
+}
+
+/* Map controls: lighter, smaller, no rim. */
+.mc-btn {
+  width: 42px;
+  height: 42px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+  border-color: transparent;
+}
+
+.map-pod { width: 42px; border-radius: 21px; border-color: transparent; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12); }
+.map-pod-subtle { width: 32px; border-radius: 16px; }
+.map-pod-subtle .mc-btn { width: 32px; height: 32px; }
+
+/* Tab slider: flat lens, no rim lighting. */
+.tabs.seg { border-color: transparent; box-shadow: none; padding: 3px; background: var(--seg-track); }
+.seg-pill {
+  top: 3px;
+  bottom: 3px;
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.14), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+}
+:root[data-theme="dark"] .seg-pill { background: rgba(255, 255, 255, 0.2); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .seg-pill { background: rgba(255, 255, 255, 0.2); } }
+
+.tabs.seg .tab { padding: 8px 14px; font-size: 14px; }
+
+/* Switches and swatches: flat. */
+.ms-train { border: none; box-shadow: none; }
+.switch { box-shadow: none; }
+.switch::after { box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); background: #fff; }
+
+.accent-swatch,
+.accent-swatch.is-active {
+  width: 34px;
+  height: 34px;
+}
+
+.accent-swatch { box-shadow: none; }
+.accent-swatch.is-active { box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px currentColor; }
+.accent-swatches { gap: 12px; }
+.accent-custom { box-shadow: inset 0 0 0 1px var(--border); }
+
+.cp-btn { box-shadow: none; background: var(--accent); }
+.color-preview { border-color: transparent; box-shadow: none; }
+
+.live-btn { border: none; background: var(--accent-soft); color: var(--accent); }
+.avatar-btn { box-shadow: none; }
+.coord-format { border: none; background: var(--surface-2); }
+
+.auth-verify { display: flex; flex-direction: column; gap: 10px; }
+.auth-verify[hidden], .auth-form[hidden], .auth-guest[hidden] { display: none; }
+.auth-verify h2 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.02em; text-align: center; }
+.auth-verify-text { margin: 0 0 6px; font-size: 14px; line-height: 1.5; color: var(--text-dim); text-align: center; }
+.auth-verify .link-btn { align-self: center; margin-top: 4px; }

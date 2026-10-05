@@ -479,9 +479,11 @@
       if (wasActive && window.Whereabouts) window.Whereabouts.activateTab('now');
     }
 
-    fbAuth.onAuthStateChanged(auth, function (user) {
+    function onUser(user) {
       teardown();
-      if (!user) return;
+      // Unconfirmed addresses get nothing: the rules reject them anyway, and
+      // the Friends tab shouldn't appear for an account that can't use it.
+      if (!user || !user.emailVerified) return;
 
       currentUid = user.uid;
       currentEmail = user.email;
@@ -524,6 +526,11 @@
         function (snap) { friendships = snap.docs.map(toDocObj); renderFriends(); },
         function () {}
       ));
-    });
+    }
+
+    fbAuth.onAuthStateChanged(auth, onUser);
+    // Confirming the address doesn't change who is signed in, so there is no
+    // auth-state event — auth.js announces it instead.
+    window.addEventListener('whereabouts:verified', function () { onUser(auth.currentUser); });
   }
 })();

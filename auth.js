@@ -125,6 +125,129 @@
       $('auth-submit').disabled = busy;
     }
 
+
+    /* "Real email" check, before an account is created. Three layers:
+     * shape, a list of throwaway-inbox providers, and a DNS lookup that the
+     * domain can actually receive mail at all. The decisive check is the
+     * confirmation link every account must click before the app opens; this
+     * just stops obvious junk early and with a clear message. */
+    var DISPOSABLE = ["mailinator.com", "guerrillamail.com", "guerrillamail.net", "guerrillamail.org", "guerrillamail.de", "sharklasers.com", "grr.la", "guerrillamailblock.com", "spam4.me", "10minutemail.com", "10minutemail.net", "20minutemail.com", "tempmail.com", "temp-mail.org", "temp-mail.io", "tempmail.net", "tempmailo.com", "tempr.email", "tmpmail.org", "tmpmail.net", "trashmail.com", "trashmail.net", "trashmail.de", "yopmail.com", "yopmail.net", "yopmail.fr", "cool.fr.nf", "jetable.org", "nospam.ze.tc", "getnada.com", "nada.email", "dispostable.com", "maildrop.cc", "mailnesia.com", "mintemail.com", "throwawaymail.com", "fakeinbox.com", "fakemailgenerator.com", "emailondeck.com", "moakt.com", "mohmal.com", "mytemp.email", "burnermail.io", "discard.email", "discardmail.com", "spamgourmet.com", "mailcatch.com", "mailnull.com", "mailforspam.com", "mail-temporary.com", "einrot.com", "wegwerfmail.de", "wegwerfmail.net", "wegwerfmail.org", "byom.de", "trash-mail.com", "trash-mail.de", "33mail.com", "anonbox.net", "inboxkitten.com", "harakirimail.com", "spambox.us", "spamfree24.org", "tempinbox.com", "tempail.com", "emailfake.com", "email-fake.com", "fakemail.net", "luxusmail.org", "throwam.com", "tmail.ws", "mail.tm", "mail.gw", "1secmail.com", "1secmail.net", "1secmail.org"];
+    var DISPOSABLE_SET = {};
+    DISPOSABLE.forEach(function (d) { DISPOSABLE_SET[d] = true; });
+
+    function dnsHas(name, type) {
+      return fetch('https://cloudflare-dns.com/dns-query?name=' + encodeURIComponent(name) + '&type=' + type, {
+        headers: { accept: 'application/dns-json' }
+      }).then(function (r) { return r.json(); });
+    }
+
+    // Resolves to an error message, or null when the address looks real.
+    // Network trouble in the DNS check never blocks anyone — confirmation
+    // still guards the door.
+    function checkRealEmail(email) {
+      var m = /^[^\s@]+@([^\s@]+\.[^\s@.]{2,})$/.exec(email);
+      if (!m || /\.\./.test(email)) return Promise.resolve(t('auth.err.invalidEmail'));
+      var domain = m[1].toLowerCase();
+      var parts = domain.split('.');
+      for (var i = 0; i < parts.length - 1; i++) {
+        if (DISPOSABLE_SET[parts.slice(i).join('.')]) return Promise.resolve(t('auth.err.disposable'));
+      }
+      return dnsHas(domain, 'MX').then(function (res) {
+        if (res.Status === 3) return t('auth.err.noMail');
+        if (res.Answer && res.Answer.some(function (a) { return a.type === 15; })) return null;
+        // No MX record: mail can still go to the domain's own address record.
+        return dnsHas(domain, 'A').then(function (a) {
+          return (a.Answer && a.Answer.length) ? null : t('auth.err.noMail');
+        });
+      }).catch(function () { return null; });
+    }
+
+    /* Everyone must confirm their address before the app opens. The page
+     * re-checks on its own (every few seconds, and when you come back to the
+     * tab), so tapping the link in your inbox is usually enough. */
+    var verifyUser = null;
+    var verifyTimer = 0;
+    var lastSent = 0;
+
+    function vSet(id, msg) {
+      var el = $(id);
+      if (!msg) { el.hidden = true; return; }
+      el.textContent = msg;
+      el.hidden = false;
+    }
+
+    function sendVerification(user) {
+      lastSent = Date.now();
+      return fbAuth.sendEmailVerification(user);
+    }
+
+    function showVerify(user) {
+      verifyUser = user;
+      $('app-root').hidden = true;
+      $('auth-gate').hidden = false;
+      $('auth-form').hidden = true;
+      var g = $('auth-guest'); if (g) g.hidden = true;
+      $('auth-verify').hidden = false;
+      $('auth-verify-text').textContent = t('auth.verify.text', { email: user.email });
+      clearInterval(verifyTimer);
+      verifyTimer = setInterval(function () { checkVerified(false); }, 4000);
+    }
+
+    function checkVerified(manual) {
+      var user = verifyUser;
+      if (!user) return Promise.resolve();
+      return user.reload().then(function () {
+        if (user.emailVerified) {
+          clearInterval(verifyTimer);
+          // The confirmed flag lives in the sign-in token: refresh it so the
+          // database rules see it straight away.
+          return user.getIdToken(true).then(function () {
+            verifyUser = null;
+            enterAsUser(user);
+            window.dispatchEvent(new CustomEvent('whereabouts:verified'));
+          });
+        }
+        if (manual) vSet('auth-verify-status', t('auth.verify.notYet'));
+      }).catch(function (err) {
+        if (manual) vSet('auth-verify-error', authErrorMessage(err));
+      });
+    }
+
+    $('auth-verify-done').addEventListener('click', function () {
+      vSet('auth-verify-error', null); vSet('auth-verify-status', null);
+      checkVerified(true);
+    });
+
+    $('auth-verify-resend').addEventListener('click', function () {
+      vSet('auth-verify-error', null); vSet('auth-verify-status', null);
+      var wait = 60 - Math.floor((Date.now() - lastSent) / 1000);
+      if (verifyUser && wait > 0 && lastSent) { vSet('auth-verify-status', t('auth.verify.cooldown', { s: wait })); return; }
+      sendVerification(verifyUser).then(function () {
+        vSet('auth-verify-status', t('auth.verify.resent'));
+      }).catch(function (err) { vSet('auth-verify-error', authErrorMessage(err)); });
+    });
+
+    $('auth-verify-other').addEventListener('click', function () {
+      fbAuth.signOut(auth).then(function () { location.reload(); });
+    });
+
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden && verifyUser) checkVerified(false);
+    });
+
+    function enterAsUser(user) {
+      // A real sign-in always wins over a leftover guest flag.
+      guestMode = false;
+      try { localStorage.removeItem(GUEST_KEY); } catch (e) {}
+      $('guest-badge').hidden = true;
+      $('auth-gate').hidden = true;
+      $('app-root').hidden = false;
+      $('account-avatar').hidden = false;
+      $('account-initial').textContent = (user.email || '?').charAt(0).toUpperCase();
+      $('account-menu-email').textContent = user.email;
+      startApp();
+    }
+
     function applyMode() {
       $('auth-submit').textContent = mode === 'signin' ? t('auth.signIn') : t('auth.createAccount');
       $('auth-toggle-mode').textContent = mode === 'signin' ? t('auth.needAccount') : t('auth.haveAccount');
@@ -156,8 +279,15 @@
       setError(null);
       setStatus(null);
       setBusy(true);
-      var action = mode === 'signin' ? fbAuth.signInWithEmailAndPassword : fbAuth.createUserWithEmailAndPassword;
-      action(auth, email, password)
+      var action = mode === 'signin'
+        ? fbAuth.signInWithEmailAndPassword(auth, email, password)
+        : checkRealEmail(email).then(function (problem) {
+            if (problem) { var err = new Error(problem); err.code = 'app/fake-email'; throw err; }
+            return fbAuth.createUserWithEmailAndPassword(auth, email, password).then(function (cred) {
+              return sendVerification(cred.user).catch(function () {});
+            });
+          });
+      action
         .catch(function (err) { setError(authErrorMessage(err)); })
         .finally(function () { setBusy(false); });
     });
@@ -220,17 +350,10 @@
     }
 
     fbAuth.onAuthStateChanged(auth, function (user) {
-      if (user) {
-        // A real sign-in always wins over a leftover guest flag.
-        guestMode = false;
-        try { localStorage.removeItem(GUEST_KEY); } catch (e) {}
-        $('guest-badge').hidden = true;
-        $('auth-gate').hidden = true;
-        $('app-root').hidden = false;
-        $('account-avatar').hidden = false;
-        $('account-initial').textContent = (user.email || '?').charAt(0).toUpperCase();
-        $('account-menu-email').textContent = user.email;
-        startApp();
+      if (user && !user.emailVerified) {
+        showVerify(user);
+      } else if (user) {
+        enterAsUser(user);
       } else if (guestMode) {
         // Already showing the app as a guest (entered above, or restored
         // from a previous session) — nothing to do, and critically, don't

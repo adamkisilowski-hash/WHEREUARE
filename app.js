@@ -2232,6 +2232,10 @@
   }
 
   function activateTab(name) {
+    var order = Array.prototype.map.call(document.querySelectorAll('#tabs .tab'), function (t) { return t.dataset.tab; });
+    var prev = document.querySelector('#tabs .tab.is-active');
+    var dir = prev ? order.indexOf(name) - order.indexOf(prev.dataset.tab) : 0;
+    if (dir) $('sheet-body').dataset.dir = dir > 0 ? 'fwd' : 'back';
     document.querySelectorAll('.tab').forEach(function (t) {
       var active = t.dataset.tab === name;
       t.classList.toggle('is-active', active);
@@ -2275,34 +2279,191 @@
 
   /* ------------------------------------------------ liquid glass slider */
 
-  /* The tab bar is a glass track with one translucent "lens" that slides
-   * under the active tab. It stretches on the way (a stretch/settle class
-   * toggled around each move) so it reads as a drop of liquid rather than
-   * a rectangle teleporting; with several tabs the track scrolls sideways
-   * and the active tab is kept in view. */
-  var segTimer = 0;
+  /* The tab bar is a glass track with one translucent lens under the
+   * active tab. The lens is driven by a small spring simulation instead of
+   * CSS transitions, which is what makes it feel liquid on a phone:
+   *  - it overshoots and settles, and it stretches with its own speed;
+   *  - you can grab it and drag it along the bar; it swells while held,
+   *    follows your finger 1:1, reshapes to whichever tab is under it, and
+   *    on release flicks to the tab its momentum points at;
+   *  - a tap interrupts a move in flight and continues with the velocity it
+   *    already had, so quick successive taps never snap or restart.
+   * Only transform/width/scale are touched per frame. */
+  var seg = {
+    x: 0, w: 0, vx: 0, vw: 0, tx: 0, tw: 0, grab: 1, vg: 0, grabT: 1,
+    raf: 0, last: 0, ready: false, drag: null, hot: null
+  };
+
+  function segVisibleTabs() {
+    return Array.prototype.filter.call($('tabs').querySelectorAll('.tab'), function (t) { return !t.hidden && t.offsetWidth; });
+  }
+
+  function segRender() {
+    var pill = $('seg-pill');
+    pill.style.width = seg.w + 'px';
+    pill.style.transform = 'translate3d(' + seg.x + 'px,0,0)';
+    // Stretch along the direction of travel, squash a touch across it, so
+    // the lens reads as a droplet in motion; "grab" is the held-swell.
+    var st = Math.min(Math.abs(seg.vx) / 2600, 0.2);
+    pill.style.scale = (seg.grab * (1 + st)) + ' ' + (seg.grab * (1 - st * 0.45));
+  }
+
+  function segSpring(p, v, target, k, c, dt) {
+    var a = -k * (p - target) - c * v;
+    v += a * dt;
+    return [p + v * dt, v];
+  }
+
+  function segFrame(now) {
+    seg.raf = 0;
+    var dt = Math.min(Math.max((now - seg.last) / 1000, 0.001), 0.034);
+    seg.last = now;
+    var nav = $('tabs');
+
+    var r;
+    if (seg.drag && seg.drag.moved) {
+      // The finger owns x; width still springs to the tab underneath.
+      var px = nav.getBoundingClientRect();
+      var cx = seg.drag.lastX;
+      if (cx < px.left + 28) nav.scrollLeft -= 9;
+      else if (cx > px.right - 28) nav.scrollLeft += 9;
+    } else {
+      r = segSpring(seg.x, seg.vx, seg.tx, 520, 30, dt);
+      seg.x = r[0]; seg.vx = r[1];
+    }
+    r = segSpring(seg.w, seg.vw, seg.tw, 520, 32, dt);
+    seg.w = r[0]; seg.vw = r[1];
+    r = segSpring(seg.grab, seg.vg, seg.grabT, 600, 28, dt);
+    seg.grab = r[0]; seg.vg = r[1];
+    segRender();
+
+    var dragging = !!(seg.drag && seg.drag.moved);
+    var settled = !dragging && !seg.drag &&
+      Math.abs(seg.x - seg.tx) < 0.2 && Math.abs(seg.vx) < 1 &&
+      Math.abs(seg.w - seg.tw) < 0.2 && Math.abs(seg.vw) < 1 &&
+      Math.abs(seg.grab - seg.grabT) < 0.002 && Math.abs(seg.vg) < 0.02;
+    if (settled) {
+      seg.x = seg.tx; seg.w = seg.tw; seg.vx = seg.vw = 0; seg.grab = seg.grabT; seg.vg = 0;
+      segRender();
+      return;
+    }
+    seg.raf = requestAnimationFrame(segFrame);
+  }
+
+  function segKick() {
+    if (seg.raf) return;
+    seg.last = performance.now();
+    seg.raf = requestAnimationFrame(segFrame);
+  }
+
   function moveSegPill(animate) {
     var nav = $('tabs'), pill = $('seg-pill');
     if (!nav || !pill) return;
     var active = nav.querySelector('.tab.is-active');
     if (!active || active.hidden || !active.offsetWidth) { pill.style.opacity = '0'; return; }
-    var left = active.offsetLeft, width = active.offsetWidth;
     pill.style.opacity = '1';
-    if (animate && pill.dataset.ready === '1') {
-      pill.classList.add('is-moving');
-      clearTimeout(segTimer);
-      segTimer = setTimeout(function () { pill.classList.remove('is-moving'); }, 380);
+    seg.tx = active.offsetLeft;
+    seg.tw = active.offsetWidth;
+
+    if (!animate || !seg.ready) {
+      seg.x = seg.tx; seg.w = seg.tw; seg.vx = seg.vw = 0;
+      segRender();
+      seg.ready = true;
     } else {
-      pill.style.transition = 'none';
-      requestAnimationFrame(function () { pill.style.transition = ''; });
+      segKick();
     }
-    pill.style.width = width + 'px';
-    pill.style.transform = 'translateX(' + left + 'px)';
-    pill.dataset.ready = '1';
+
+    var left = seg.tx, width = seg.tw;
     var viewLeft = nav.scrollLeft, viewRight = viewLeft + nav.clientWidth;
     if (left < viewLeft + 8 || left + width > viewRight - 8) {
       nav.scrollTo({ left: Math.max(0, left - (nav.clientWidth - width) / 2), behavior: animate ? 'smooth' : 'auto' });
     }
+  }
+
+  function wireSegDrag() {
+    var nav = $('tabs'), pill = $('seg-pill');
+
+    nav.addEventListener('pointerdown', function (e) {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      var pr = pill.getBoundingClientRect();
+      // Only a press that lands on the lens picks it up; anywhere else the
+      // bar scrolls natively and a tap is a normal tab tap.
+      if (e.clientX < pr.left || e.clientX > pr.right) {
+        seg.grabT = 1.04;       // tiny press feedback on the lens
+        segKick();
+        return;
+      }
+      seg.drag = {
+        id: e.pointerId, offset: e.clientX - pr.left - (pr.width - seg.w) / 2,
+        moved: false, startX: e.clientX, lastX: e.clientX, lastT: e.timeStamp
+      };
+      seg.grabT = 1.1;
+      segKick();
+      try { nav.setPointerCapture(e.pointerId); } catch (err) {}
+    });
+
+    nav.addEventListener('pointermove', function (e) {
+      var d = seg.drag;
+      if (!d || d.id !== e.pointerId) return;
+      if (!d.moved && Math.abs(e.clientX - d.startX) < 4) return;
+      d.moved = true;
+      var tabs = segVisibleTabs();
+      if (!tabs.length) return;
+      var rect = nav.getBoundingClientRect();
+      var first = tabs[0], last = tabs[tabs.length - 1];
+      var minX = first.offsetLeft;
+      var maxX = last.offsetLeft + last.offsetWidth - seg.w;
+      var nx = e.clientX - rect.left + nav.scrollLeft - d.offset;
+      // Rubber-band past either end rather than a hard stop.
+      if (nx < minX) nx = minX - Math.min((minX - nx) * 0.35, 26);
+      if (nx > maxX) nx = maxX + Math.min((nx - maxX) * 0.35, 26);
+      var dt = Math.max((e.timeStamp - d.lastT) / 1000, 0.008);
+      var v = (nx - seg.x) / dt;
+      seg.vx = seg.vx * 0.6 + v * 0.4;
+      seg.x = nx;
+      d.lastX = e.clientX;
+      d.lastT = e.timeStamp;
+
+      var center = nx + seg.w / 2;
+      var hot = tabs.filter(function (t) { return center >= t.offsetLeft && center < t.offsetLeft + t.offsetWidth; })[0] || (center < minX ? first : last);
+      if (hot !== seg.hot) {
+        if (seg.hot) seg.hot.classList.remove('is-hot');
+        hot.classList.add('is-hot');
+        seg.hot = hot;
+        seg.tw = hot.offsetWidth;
+        if (navigator.vibrate) { try { navigator.vibrate(6); } catch (err) {} }
+      }
+      segKick();
+    });
+
+    function release(e) {
+      var d = seg.drag;
+      if (!d || (e && d.id !== e.pointerId)) return;
+      seg.drag = null;
+      seg.grabT = 1;
+      try { nav.releasePointerCapture(d.id); } catch (err) {}
+      if (seg.hot) seg.hot.classList.remove('is-hot');
+      if (d.moved) {
+        // Where the lens is heading, not just where it is: a flick carries
+        // it to the neighbouring tab.
+        var tabs = segVisibleTabs();
+        var center = seg.x + seg.w / 2 + Math.max(-500, Math.min(500, seg.vx)) * 0.1;
+        var target = tabs.filter(function (t) { return center >= t.offsetLeft && center < t.offsetLeft + t.offsetWidth; })[0] ||
+          (center < tabs[0].offsetLeft ? tabs[0] : tabs[tabs.length - 1]);
+        seg.hot = null;
+        if (target && target.dataset.tab !== (nav.querySelector('.tab.is-active') || {}).dataset.tab) {
+          target.click();
+        } else {
+          moveSegPill(true);
+        }
+      } else {
+        seg.hot = null;
+      }
+      segKick();
+    }
+
+    nav.addEventListener('pointerup', release);
+    nav.addEventListener('pointercancel', release);
   }
 
   function wireUI() {
@@ -2339,6 +2500,7 @@
 
     // The lens has to follow the tabs whenever they change size or appear
     // (language switch, Friends tab showing up after sign-in, rotation).
+    wireSegDrag();
     var segRefresh = function () { moveSegPill(false); };
     window.addEventListener('resize', segRefresh);
     if (window.MutationObserver) {
