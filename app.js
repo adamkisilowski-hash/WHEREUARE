@@ -1189,14 +1189,27 @@
    * map is zoomed in enough for the box to be a neighbourhood, not a
    * country. */
   var LIVE_URL = 'https://oebb.macistry.com/api/radar';
-  var LIVE_INTERVAL = 30000;   // matches the server's own cache lifetime
+  /* Why the positions used to lag: the server caches each answer for 30 s
+   * and we only asked every 30 s, so a marker could sit up to a minute
+   * behind the real vehicle. Now every request is fresh (cache-busted) and,
+   * instead of a single point, asks for the vehicle's predicted path over
+   * the next LIVE_HORIZON seconds in LIVE_FRAMES steps. The marker is then
+   * moved along that path in real time, every animation frame, so between
+   * polls it keeps travelling where the timetable says it is right now —
+   * delays included — rather than waiting for the next answer. The horizon
+   * is capped at 60 s because above that HAFAS stops honouring the map
+   * bounds and returns every vehicle in the region. */
+  var LIVE_INTERVAL = 20000;
+  var LIVE_HORIZON = 60;
+  var LIVE_FRAMES = 6;
+  var LIVE_BLEND = 1500;     // ms to ease from the shown spot onto a fresh path
   var LIVE_MIN_ZOOM = 13;
   var LIVE_KINDS = {
     nationalExpress: 'train', national: 'train', interregional: 'train',
     regional: 'train', suburban: 'train', subway: 'subway', tram: 'tram'
   };
 
-  state.veh = { vehicles: [], timer: null, moveTimer: null, busy: false, failed: false, at: 0, tooFar: false };
+  state.veh = { vehicles: [], timer: null, moveTimer: null, raf: 0, busy: false, failed: false, at: 0, tooFar: false };
 
   function liveKind(line) {
     if (!line) return null;
@@ -1262,9 +1275,13 @@
     var b = mapBounds();
     var url = LIVE_URL + '?north=' + b.north.toFixed(5) + '&south=' + b.south.toFixed(5) +
       '&west=' + b.west.toFixed(5) + '&east=' + b.east.toFixed(5) +
-      '&results=1000&duration=30&frames=1&polylines=false';
+      '&results=1000&duration=' + LIVE_HORIZON + '&frames=' + LIVE_FRAMES +
+      '&polylines=true&_=' + Date.now();
     state.veh.busy = true;
-    fetch(url)
+    // The server works out "where is it now" when the request arrives, so
+    // the moment we send it is the path's t=0 (give or take the latency).
+    var sentAt = Date.now();
+    fetch(url, { cache: 'no-store' })
       .then(function (r) {
         if (!r.ok) throw new Error('radar failed: ' + r.status);
         return r.json();
@@ -1272,12 +1289,15 @@
       .then(function (data) {
         var list = (data && data.movements) || [];
         var seen = {};
+        var previous = {};
+        state.veh.vehicles.forEach(function (v) { previous[v.id] = v; });
+        var now = Date.now();
         state.veh.vehicles = list.map(function (m) {
           var kind = liveKind(m.line);
           if (!kind || !m.location || m.location.latitude == null) return null;
           if (seen[m.tripId]) return null;
           seen[m.tripId] = true;
-          return {
+          var v = {
             id: m.tripId,
             kind: kind,
             name: (m.line && m.line.name) || '',
@@ -1285,14 +1305,29 @@
             direction: m.direction || '',
             lat: m.location.latitude,
             lng: m.location.longitude,
-            delay: liveDelay(m)
+            delay: liveDelay(m),
+            path: livePath(m),
+            t0: sentAt,
+            step: LIVE_HORIZON * 1000 / LIVE_FRAMES,
+            blend: null
           };
+          // If this vehicle was already on screen, don't let it jump to the
+          // fresh path's "now" — start from where it is and ease over.
+          var old = previous[v.id];
+          if (old) {
+            var fresh = pathPosition(v, now);
+            v.blend = { dlat: old.lat - fresh.lat, dlng: old.lng - fresh.lng, t0: now };
+            v.lat = old.lat;
+            v.lng = old.lng;
+          }
+          return v;
         }).filter(Boolean);
         state.veh.failed = false;
         state.veh.at = Date.now();
         state.veh.busy = false;
         drawVehicleMarkers();
         renderVehicles();
+        tickVehicles();
       })
       .catch(function () {
         state.veh.failed = true;
@@ -1301,10 +1336,66 @@
       });
   }
 
-  /* Vehicles that were already on the map glide to their new position
-   * instead of being torn down and redrawn; new ones fade in, departed ones
-   * are removed. */
-  var VEH_GLIDE = 2500;
+  // The predicted path as [{lat, lng}], one point per LIVE_HORIZON/LIVE_FRAMES
+  // seconds starting at "now". Falls back to the single current position.
+  function livePath(m) {
+    var feats = m.polyline && m.polyline.features;
+    var pts = [];
+    if (feats && feats.length) {
+      feats.forEach(function (f) {
+        var c = f && f.geometry && f.geometry.coordinates;
+        if (c && c.length >= 2) pts.push({ lat: c[1], lng: c[0] });
+      });
+    }
+    if (!pts.length) pts.push({ lat: m.location.latitude, lng: m.location.longitude });
+    return pts;
+  }
+
+  // Where along its path a vehicle is at wall-clock `now`. Past the end of
+  // the path it holds the last point rather than inventing movement.
+  function pathPosition(v, now) {
+    var path = v.path;
+    if (path.length === 1) return path[0];
+    var e = Math.max(0, now - v.t0);
+    var i = Math.floor(e / v.step);
+    if (i >= path.length - 1) return path[path.length - 1];
+    var f = (e - i * v.step) / v.step;
+    var a = path[i], b = path[i + 1];
+    return { lat: a.lat + (b.lat - a.lat) * f, lng: a.lng + (b.lng - a.lng) * f };
+  }
+
+  /* Runs every animation frame while vehicles are shown: advances each one
+   * along its predicted path, eases out any blend from the previous poll,
+   * and moves the markers in one batch. Pauses itself when the tab is
+   * hidden (rAF stops) and when there's nothing left to move. */
+  function tickVehicles() {
+    if (state.veh.raf) return;
+    var step = function () {
+      state.veh.raf = 0;
+      if (!state.prefs.trainMode || !state.veh.vehicles.length) return;
+      var now = Date.now();
+      var moving = false;
+      state.veh.vehicles.forEach(function (v) {
+        var p = pathPosition(v, now);
+        if (v.blend) {
+          var k = Math.min(1, (now - v.blend.t0) / LIVE_BLEND);
+          var w = 1 - (1 - Math.pow(1 - k, 3));
+          p = { lat: p.lat + v.blend.dlat * w, lng: p.lng + v.blend.dlng * w };
+          if (k >= 1) v.blend = null;
+        }
+        if (v.blend || (now - v.t0) < v.step * (v.path.length - 1)) moving = true;
+        v.lat = p.lat;
+        v.lng = p.lng;
+        map.setMarkerPosition('veh:' + v.id, p.lat, p.lng);
+      });
+      map.refreshMarkers();
+      if (moving) state.veh.raf = requestAnimationFrame(step);
+    };
+    state.veh.raf = requestAnimationFrame(step);
+  }
+
+  /* Markers are created once per vehicle and then only moved by the ticker;
+   * departed vehicles are removed, new ones fade in. */
   var vehOnMap = {};
   function drawVehicleMarkers() {
     if (!state.prefs.trainMode) { map.clearMarkers('veh:'); vehOnMap = {}; return; }
@@ -1312,7 +1403,7 @@
     state.veh.vehicles.forEach(function (v) {
       var id = 'veh:' + v.id;
       var label = t('live.kind.' + v.kind) + ' ' + v.short + ' → ' + v.direction;
-      var el = map.setMarker(id, v.lat, v.lng, 'mm-marker-veh mm-veh-' + v.kind, label, { glide: VEH_GLIDE });
+      var el = map.setMarker(id, v.lat, v.lng, 'mm-marker-veh mm-veh-' + v.kind, label);
       if (el.textContent !== v.short) el.textContent = v.short;
       next[id] = true;
     });
@@ -1360,8 +1451,10 @@
   function stopVehicles() {
     if (state.veh.timer) clearInterval(state.veh.timer);
     if (state.veh.moveTimer) clearTimeout(state.veh.moveTimer);
+    if (state.veh.raf) cancelAnimationFrame(state.veh.raf);
     state.veh.timer = null;
     state.veh.moveTimer = null;
+    state.veh.raf = 0;
     state.veh.vehicles = [];
     state.veh.at = 0;
     if (map) map.clearMarkers('veh:');
@@ -2244,7 +2337,7 @@
     // Dragging the map means the user is looking somewhere else on purpose.
     map.on('move', function () { syncHash(); scheduleVehicles(); });
     document.addEventListener('visibilitychange', function () {
-      if (!document.hidden && state.prefs.trainMode) fetchVehicles();
+      if (!document.hidden && state.prefs.trainMode) { fetchVehicles(); tickVehicles(); }
     });
     map.el.addEventListener('pointerdown', function () { state.followMe = false; });
 

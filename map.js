@@ -526,6 +526,22 @@
     return marker.el;
   };
 
+  /* For callers that move many markers per frame: set positions without
+   * re-laying everything out each time, then call refreshMarkers() once. */
+  MiniMap.prototype.setMarkerPosition = function (id, lat, lng) {
+    var marker = this.markers[id];
+    if (!marker) return this;
+    marker.anim = null;
+    marker.lat = lat;
+    marker.lng = lng;
+    return this;
+  };
+
+  MiniMap.prototype.refreshMarkers = function () {
+    this._placeMarkers();
+    return this;
+  };
+
   // Advance gliding markers; true while any are still moving.
   MiniMap.prototype._stepMarkers = function (t) {
     var any = false;
