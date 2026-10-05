@@ -254,6 +254,31 @@
     </section>
 
     <section class="tab-panel" data-panel="train" role="tabpanel">
+      <div class="ts">
+        <label class="ts-field">
+          <svg class="ts-icon" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>
+          <input id="ts-input" type="search" inputmode="search" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false" data-i18n-placeholder="ts.placeholder" placeholder="Search train, line or station">
+          <button id="ts-clear" class="ts-clear" type="button" hidden aria-label="Clear">×</button>
+        </label>
+        <div id="ts-results" class="ts-results" hidden>
+          <p id="ts-status" class="muted ts-status"></p>
+          <div id="ts-trains-wrap" hidden>
+            <h3 class="ts-head" data-i18n="ts.trains">Trains &amp; lines</h3>
+            <ol id="ts-trains" class="ts-list"></ol>
+          </div>
+          <div id="ts-stops-wrap" hidden>
+            <h3 class="ts-head" data-i18n="ts.stations">Stations</h3>
+            <ol id="ts-stops" class="ts-list"></ol>
+          </div>
+        </div>
+        <div id="ts-deps" class="ts-deps" hidden>
+          <button id="ts-back" class="ts-back" type="button"><span aria-hidden="true">‹</span> <span data-i18n="ts.back">Back</span></button>
+          <h3 id="ts-dep-title" class="ts-dep-title"></h3>
+          <p id="ts-dep-status" class="muted ts-status"></p>
+          <ol id="ts-dep-list" class="ts-list"></ol>
+        </div>
+      </div>
+
       <button id="train-toggle" class="ms-train" type="button" data-i18n-title="train.modeTitle" aria-pressed="false">
         <span class="ms-train-label"><span class="ms-train-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="14" rx="3.5"/><path d="M5 11h14"/><circle cx="9" cy="14" r=".6" fill="currentColor"/><circle cx="15" cy="14" r=".6" fill="currentColor"/><path d="M8 21l2-4M16 21l-2-4"/></svg></span><span data-i18n="train.mode">Transit mode</span></span>
         <span id="train-state" class="ms-train-state">off</span><span class="switch" aria-hidden="true"></span>
@@ -261,44 +286,10 @@
       <p id="train-intro" class="muted train-intro" data-i18n="train.modeHint">Turn this on to see live trains, trams and U-Bahn on the map, plus the line or stop near you.</p>
 
       <div id="train-body" hidden>
-      <p id="train-status" class="muted" data-i18n="train.searching">Looking for a line or stop near you…</p>
-
-      <div id="train-card" class="train-card" hidden>
-        <div class="train-headline">
-          <span id="train-service" class="train-service"></span>
-          <span id="train-confidence" class="train-confidence"></span>
-        </div>
-        <p id="train-line" class="train-line" hidden></p>
-        <p id="train-direction" class="train-direction" hidden></p>
-      </div>
-
-      <div id="train-filter" class="train-filter" hidden>
-        <p id="train-ask" class="train-ask"></p>
-        <div id="train-directions" class="train-directions" role="group" aria-label="Direction"></div>
-        <div id="train-pattern" class="train-pattern" hidden>
-          <span class="train-pattern-label" data-i18n="train.service">Service</span>
-          <div class="train-pattern-btns">
-            <button id="train-pattern-all" class="train-pattern-btn" type="button" data-i18n="train.stopAll">All stops</button>
-            <button id="train-pattern-fast" class="train-pattern-btn" type="button" data-i18n="train.stopFast">Fast</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="stats stats-2">
-        <div class="stat"><span class="stat-label" data-i18n="now.speed">Speed</span><span id="train-speed" class="stat-value">—</span></div>
-        <div class="stat"><span class="stat-label" data-i18n="train.nextStop">Next stop</span><span id="train-next" class="stat-value">—</span></div>
-      </div>
-
-      <h2 class="train-stops-head" data-i18n="train.upcomingStops">Upcoming stops</h2>
-      <ol id="train-stops" class="train-stops"></ol>
-      <p id="train-stops-empty" class="muted" data-i18n="train.noStops">No stations ahead yet — this needs you to be moving before it can tell which way you're going.</p>
-
       <h2 class="train-stops-head" data-i18n="live.head">Live nearby: trains, trams &amp; U-Bahn</h2>
       <p id="veh-status" class="muted veh-status" data-i18n="live.loading">Loading live vehicles…</p>
       <ol id="veh-list" class="train-stops veh-list"></ol>
       <p class="muted train-disclaimer" data-i18n="live.disclaimer">Live positions from the ÖBB/VOR real-time timetable; vehicles move along their predicted path in real time between updates.</p>
-
-      <p class="muted train-disclaimer" data-i18n="train.disclaimer">Estimated from OpenStreetMap's railway and bus-stop data and your own speed and heading — not a timetable lookup, so it names the line or nearby routes, never a specific train number or bus run.</p>
       </div>
     </section>
 

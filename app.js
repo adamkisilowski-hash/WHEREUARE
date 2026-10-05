@@ -49,24 +49,7 @@
     streetLookupPoint: null,
     weather: null,
     weatherAt: 0,
-    weatherPoint: null,
-    train: {
-      track: null,       // the railway way we think you're on
-      stations: [],      // every named station the last query found nearby
-      stops: [],         // of those, the ones ahead of you, nearest first
-      queryAt: 0,
-      queryPoint: null,
-      busy: false,
-      failed: false,
-      prevPoint: null,   // for deriving heading when the GPS won't report one
-      // The confirmation filter's answers — a bearing you picked for "which
-      // way am I going", and whether you're on the stopping or fast service.
-      // In-memory only: they belong to this journey, not to the saved prefs.
-      chosenBearing: null,
-      stopPattern: 'all',
-      mode: null,        // 'rail' | 'bus' | null — which of the two we think you're near
-      busRoutes: []      // route_ref values tagged on nearby bus stops
-    }
+    weatherPoint: null
   };
 
   // WMO weather codes, as used by Open-Meteo. Collapsed to the common cases —
@@ -720,300 +703,12 @@
     return m ? t('time.etaHourMin', { h: h, m: m }) : t('time.etaHour', { h: h });
   }
 
-  /* -------------------------------------------------------- train mode */
+  /* ----------------------------------------------------- transit mode */
 
-  /* What this can and cannot know, stated plainly because the difference
-   * matters: OpenStreetMap describes *infrastructure* — where the rails
-   * run, what the line is called, which stations and bus stops sit where.
-   * It says nothing about which service is running right now. So this
-   * infers the line or stop you're near from real mapped data plus your
-   * own speed and heading, and estimates the *kind* of service that
-   * implies. It never claims a train number or bus run: that would need a
-   * live timetable feed, which needs a backend and an operator's API key,
-   * and inventing one from a plausible guess would be worse than saying so.
-   * Rails and roads aren't the same kind of evidence, though: being on
-   * tracks is close to unambiguous, while being near a bus stop just means
-   * a stop is near — so rail always takes priority when both are found,
-   * and a bus guess never claims to be as sure as a rail one. */
-
+  // Transit mode shows the live trains, trams and U-Bahn on the map, with the
+  // railway overlay underneath. (It no longer tries to work out which line
+  // you are riding; the search finds a specific train instead.)
   var RAILWAY_TILES = 'https://tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png';
-
-  // Overpass is a small, donation-funded, heavily-loaded shared service, so
-  // this is deliberately frugal: only while train mode is on, at most once
-  // a minute, and only once you've actually moved far enough for the answer
-  // to plausibly have changed. A train covers 500 m in well under a minute,
-  // so in practice the interval floor is what governs.
-  var TRAIN_QUERY_INTERVAL = 60000;
-  var TRAIN_QUERY_DISTANCE = 500;
-  var OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
-
-  // Buses run on ordinary roads, so there's no equivalent of "on the rails":
-  // the closest honest signal is standing right by a stop. This is deliberately
-  // tight, close to GPS accuracy in a street, so it doesn't fire for someone
-  // merely walking down the same street as a stop.
-  var BUS_STOP_RANGE = 150;
-
-  // Rails that carry a service worth naming, scored so a running line beats
-  // the sidings and yard tracks that sit alongside it in every station.
-  function scoreTrack(tags) {
-    var score = 0;
-    if (tags.name || tags.ref) score += 2;
-    if (tags.usage === 'main') score += 3;
-    else if (tags.usage === 'branch') score += 2;
-    // service=* on a railway means siding/yard/spur/crossover — real rails,
-    // but not the line a passenger service runs on.
-    if (tags.service) score -= 4;
-    if (tags.railway === 'rail') score += 1;
-    return score;
-  }
-
-  function pickTrack(ways) {
-    var best = null, bestScore = -Infinity;
-    ways.forEach(function (w) {
-      var tags = w.tags || {};
-      var s = scoreTrack(tags);
-      if (s > bestScore) { bestScore = s; best = tags; }
-    });
-    return best;
-  }
-
-  /* The service estimate. Track class carries most of it — a subway tunnel
-   * is never an intercity — with speed breaking the remaining tie between
-   * long-distance and regional services on shared main line. */
-  function estimateService(tags, speedMps) {
-    if (!tags) return null;
-    var kmh = (speedMps != null && !isNaN(speedMps)) ? speedMps * 3.6 : null;
-    switch (tags.railway) {
-      case 'subway': return 'train.svcSubway';
-      case 'tram': return 'train.svcTram';
-      case 'light_rail': return 'train.svcLightRail';
-      case 'monorail': return 'train.svcMonorail';
-      case 'narrow_gauge': return 'train.svcNarrowGauge';
-    }
-    if (tags.highspeed === 'yes' || (kmh != null && kmh > 200)) return 'train.svcHighSpeed';
-    if (kmh != null && kmh > 120) return 'train.svcIntercity';
-    if (tags.usage === 'branch') return 'train.svcRegional';
-    if (tags.usage === 'main') return 'train.svcMainLine';
-    return 'train.svcRail';
-  }
-
-  /* How much to trust the above. A named main line under you while you're
-   * moving at train speed with stations lining up ahead is about as good as
-   * this gets; an unnamed track while stationary is a guess and says so. */
-  function trainConfidence(tags, speedMps, stops) {
-    var named = !!(tags && (tags.name || tags.ref));
-    var moving = speedMps != null && speedMps > 8; // ~30 km/h, past tram-in-traffic
-    if (named && moving && stops.length) return 'high';
-    if (named && (moving || stops.length)) return 'medium';
-    return 'low';
-  }
-
-  // route_ref lists the route numbers a stop serves, semicolon- or
-  // comma-separated. It's the one honestly-taggable fact OSM offers about
-  // buses near you — there's no OSM equivalent of "which one you're on".
-  function uniqueRouteRefs(nodes) {
-    var seen = {}, out = [];
-    nodes.forEach(function (n) {
-      var ref = n.tags && n.tags.route_ref;
-      if (!ref) return;
-      ref.split(/[;,]/).forEach(function (part) {
-        var r = part.trim();
-        if (r && !seen[r]) { seen[r] = true; out.push(r); }
-      });
-    });
-    return out;
-  }
-
-  /* Capped below rail's ceiling on purpose: a named line under you at train
-   * speed is about as sure as this gets, but standing near a bus stop never
-   * rules out just standing there — so this can say "likely", never
-   * "confident". */
-  function busConfidence(routes, speedMps, stops) {
-    var moving = speedMps != null && speedMps > 2.5; // faster than a stroll
-    if (routes.length && moving && stops.length) return 'medium';
-    return 'low';
-  }
-
-  // Which way are we pointing? The GPS reports a heading when it's confident;
-  // when it isn't, two fixes far enough apart give the same answer.
-  function trainHeading() {
-    var c = state.position && state.position.coords;
-    if (c && c.heading != null && !isNaN(c.heading) && c.speed != null && c.speed > 2) return c.heading;
-    var prev = state.train.prevPoint;
-    if (!prev || !c) return null;
-    var here = { lat: c.latitude, lng: c.longitude };
-    return distance(prev, here) > 60 ? bearing(prev, here) : null;
-  }
-
-  /* Stations you're heading towards, nearest first. A cone rather than a
-   * strict bearing because track curves: a stop 10 km down a bending line
-   * is still ahead of you even when it isn't straight ahead of you. This is
-   * the honest limit of doing it without the line's own geometry — good for
-   * the next few stops, vaguer the further out it reaches. A 'fast' pattern
-   * drops the minor halts a stopping service calls at but an express skips. */
-  function stopsAhead(here, headingDeg, stations, speedMps, pattern) {
-    if (headingDeg == null) return [];
-    return stations
-      .filter(function (s) { return pattern !== 'fast' || s.railway !== 'halt'; })
-      .map(function (s) {
-        var d = distance(here, s);
-        return {
-          name: s.name,
-          lat: s.lat,
-          lng: s.lng,
-          distance: d,
-          off: Math.abs(angleDelta(headingDeg, bearing(here, s))),
-          eta: (speedMps != null && speedMps > 2) ? d / speedMps : null
-        };
-      })
-      .filter(function (s) { return s.off < 75 && s.distance > 250; })
-      .sort(function (a, b) { return a.distance - b.distance; })
-      .slice(0, 6);
-  }
-
-  /* The two ways along the line, for the "which way are you heading?"
-   * question. Without the line's own geometry, the farthest station sets
-   * one end; every station within 90° of it is that direction, the rest are
-   * the other. Each option is labelled by its farthest station — the one
-   * that reads as a destination. Returns [] if there's only one cluster
-   * (you're at or near a terminus) or nothing to split. */
-  function directionOptions(here, stations) {
-    if (!here || !stations || !stations.length) return [];
-    var withBearing = stations
-      .map(function (s) { return { name: s.name, bearing: bearing(here, s), distance: distance(here, s) }; })
-      .filter(function (s) { return s.distance > 250; })
-      .sort(function (a, b) { return b.distance - a.distance; });
-    if (!withBearing.length) return [];
-
-    var anchor = withBearing[0];
-    var fwd = [], back = [];
-    withBearing.forEach(function (s) {
-      (Math.abs(angleDelta(anchor.bearing, s.bearing)) < 90 ? fwd : back).push(s);
-    });
-
-    var opts = [{ bearing: anchor.bearing, toward: fwd[0].name }];
-    if (back.length) opts.push({ bearing: (anchor.bearing + 180) % 360, toward: back[0].name });
-    return opts;
-  }
-
-  // The bearing driving the stops list: the direction you confirmed if you
-  // picked one, otherwise the one derived from your movement.
-  function activeBearing() {
-    return state.train.chosenBearing != null ? state.train.chosenBearing : trainHeading();
-  }
-
-  /* What kind of service a station is for. U-Bahn stations are tagged
-   * railway=station + station=subway; tram stops railway=tram_stop. */
-  function stationKind(tags) {
-    if (tags.railway === 'tram_stop' || tags.station === 'tram') return 'tram';
-    if (tags.station === 'subway' || tags.subway === 'yes') return 'subway';
-    return 'rail';
-  }
-
-  /* Only the stops of the kind you're riding: on a tram the next "stop"
-   * shouldn't be an S-Bahn station two streets over, and on the U-Bahn it
-   * shouldn't be a tram stop above you. Falls back to everything if
-   * filtering would leave nothing. */
-  function stationsForTrack(stations, tags) {
-    var want = 'rail';
-    if (tags && tags.railway === 'tram') want = 'tram';
-    else if (tags && tags.railway === 'subway') want = 'subway';
-    else if (tags && tags.railway === 'light_rail') return stations;
-    var picked = stations.filter(function (s) { return s.kind === want; });
-    return picked.length ? picked : stations;
-  }
-
-  function maybeQueryRailway(lat, lng) {
-    if (!state.prefs.trainMode || state.train.busy) return;
-    var last = state.train.queryPoint;
-    var due = true;
-    if (last) {
-      var moved = distance(last, { lat: lat, lng: lng });
-      due = (Date.now() - state.train.queryAt) > TRAIN_QUERY_INTERVAL && moved > TRAIN_QUERY_DISTANCE;
-    }
-    if (!due) return;
-    queryRailway(lat, lng);
-  }
-
-  function queryRailway(lat, lng) {
-    state.train.busy = true;
-    state.train.queryAt = Date.now();
-    state.train.queryPoint = { lat: lat, lng: lng };
-
-    // Three named sets so each gets its own result cap — without that, a
-    // dense city's stations could crowd the track we're actually standing
-    // on out of a shared limit. Bus stops get a shorter radius than rail
-    // stations: they're far denser, and a bus's useful "ahead" horizon is
-    // shorter than a train's.
-    var query = '[out:json][timeout:25];' +
-      'way(around:80,' + lat + ',' + lng + ')' +
-      '["railway"~"^(rail|light_rail|subway|tram|narrow_gauge|monorail)$"]->.tracks;' +
-      'node(around:15000,' + lat + ',' + lng + ')["railway"~"^(station|halt)$"]["name"]->.stops;' +
-      'node(around:3000,' + lat + ',' + lng + ')["railway"="tram_stop"]["name"]->.tramstops;' +
-      'node(around:3000,' + lat + ',' + lng + ')["highway"="bus_stop"]->.busstops;' +
-      '.tracks out tags 12;' +
-      '.stops out 150;' +
-      '.tramstops out 150;' +
-      '.busstops out tags 200;';
-
-    fetch(OVERPASS_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'data=' + encodeURIComponent(query)
-    })
-      .then(function (r) {
-        if (!r.ok) throw new Error('overpass failed: ' + r.status);
-        return r.json();
-      })
-      .then(function (data) {
-        var elements = (data && data.elements) || [];
-        var ways = elements.filter(function (e) { return e.type === 'way'; });
-        var stations = elements.filter(function (e) {
-          return e.type === 'node' && e.tags && e.tags.name && e.lat != null && e.tags.railway;
-        }).map(function (e) {
-          return { name: e.tags.name, lat: e.lat, lng: e.lon, railway: e.tags.railway, kind: stationKind(e.tags) };
-        });
-        var busStops = elements.filter(function (e) {
-          return e.type === 'node' && e.tags && e.tags.highway === 'bus_stop' && e.lat != null;
-        });
-
-        state.train.track = pickTrack(ways);
-        if (state.train.track) {
-          // Rails win when both are present: being physically on tracks
-          // within 80 m is close to unambiguous, while a bus stop nearby
-          // just means a stop is nearby, not that you're riding anything.
-          state.train.mode = 'rail';
-          state.train.stations = stationsForTrack(stations, state.train.track);
-          state.train.busRoutes = [];
-        } else {
-          var here = { lat: lat, lng: lng };
-          var nearStops = busStops.filter(function (e) {
-            return distance(here, { lat: e.lat, lng: e.lon }) < BUS_STOP_RANGE;
-          });
-          if (nearStops.length) {
-            state.train.mode = 'bus';
-            state.train.stations = busStops.filter(function (e) { return e.tags.name; })
-              .map(function (e) { return { name: e.tags.name, lat: e.lat, lng: e.lon }; });
-            state.train.busRoutes = uniqueRouteRefs(nearStops);
-          } else {
-            state.train.mode = null;
-            state.train.stations = [];
-            state.train.busRoutes = [];
-          }
-        }
-        state.train.failed = false;
-        // Cleared before rendering, not in a .finally() afterwards: the
-        // render reads this flag to decide between "still looking" and
-        // "looked, found nothing", and .finally() runs too late for that.
-        state.train.busy = false;
-        renderTrain();
-      })
-      .catch(function () {
-        state.train.failed = true;
-        state.train.busy = false;
-        renderTrain();
-      });
-  }
 
   function setTrainMode(on) {
     state.prefs.trainMode = on;
@@ -1022,158 +717,15 @@
     applyToggleLabels();
 
     if (on) {
-      state.train.failed = false;
-      activateTab('train');
-      state.prefs.activeTab = 'train';
-      savePrefs();
-      var c = state.position && state.position.coords;
-      if (c) queryRailway(c.latitude, c.longitude);
       startVehicles();
     } else {
       stopVehicles();
-      // Nothing about a mode you've left should linger on screen.
-      state.train.track = null;
-      state.train.stations = [];
-      state.train.stops = [];
-      state.train.queryPoint = null;
-      state.train.queryAt = 0;
-      state.train.chosenBearing = null;
-      state.train.stopPattern = 'all';
-      state.train.mode = null;
-      state.train.busRoutes = [];
-      if (state.prefs.activeTab === 'train') {
-        activateTab('now');
-        state.prefs.activeTab = 'now';
-        savePrefs();
-      }
     }
     renderTrain();
-  }
-
-  function setTrainDirection(bearingDeg) {
-    state.train.chosenBearing = bearingDeg;
-    renderTrain();
-  }
-
-  function setTrainPattern(pattern) {
-    state.train.stopPattern = pattern;
-    renderTrain();
-  }
-
-  // The two direction buttons — the "which way?" filter. The one matching
-  // your movement (when we can tell) is flagged as likely, so the guess is a
-  // nudge rather than a blank choice.
-  function renderDirections(opts, derived) {
-    var host = $('train-directions');
-    host.innerHTML = '';
-    opts.forEach(function (opt) {
-      var b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'train-dir';
-      var chosen = state.train.chosenBearing != null &&
-        Math.abs(angleDelta(state.train.chosenBearing, opt.bearing)) < 45;
-      var likely = state.train.chosenBearing == null && derived != null &&
-        Math.abs(angleDelta(derived, opt.bearing)) < 60;
-      b.classList.toggle('is-active', chosen);
-      b.innerHTML = '<span class="train-dir-arrow" aria-hidden="true">→</span>' +
-        '<span class="train-dir-name">' + escapeHtml(opt.toward) + '</span>' +
-        (likely ? '<span class="train-dir-hint">' + escapeHtml(t('train.likely')) + '</span>' : '');
-      b.addEventListener('click', function () { setTrainDirection(opt.bearing); });
-      host.appendChild(b);
-    });
   }
 
   function renderTrain() {
-    if (!state.prefs.trainMode) return;
-
-    var c = state.position && state.position.coords;
-    var speed = c ? c.speed : null;
-    var tags = state.train.track;
-    var mode = state.train.mode;
-    var here = c ? { lat: c.latitude, lng: c.longitude } : null;
-
-    var known = mode === 'rail' || mode === 'bus';
-    $('train-card').hidden = !known;
-    $('train-status').hidden = known;
-    $('train-filter').hidden = !(known && here);
-
-    var bearing = activeBearing();
-    var haveDir = bearing != null;
-    var stops = (here && haveDir)
-      ? stopsAhead(here, bearing, state.train.stations || [], speed, state.train.stopPattern)
-      : [];
-    state.train.stops = stops;
-
-    if (known) {
-      var service, confidence;
-      if (mode === 'rail') {
-        service = estimateService(tags, speed);
-        confidence = trainConfidence(tags, speed, stops);
-      } else {
-        service = 'train.svcBus';
-        confidence = busConfidence(state.train.busRoutes, speed, stops);
-      }
-      $('train-service').textContent = t(service);
-      $('train-confidence').textContent = t('train.confidence' +
-        confidence.charAt(0).toUpperCase() + confidence.slice(1));
-      $('train-confidence').dataset.level = confidence;
-
-      if (mode === 'rail') {
-        var lineName = tags.name || tags.ref;
-        $('train-line').textContent = lineName ? t('train.onLine', { line: lineName }) : t('train.unnamedLine');
-      } else {
-        var routes = state.train.busRoutes;
-        $('train-line').textContent = routes.length
-          ? t('train.busRoutesNear', { routes: routes.join(', ') })
-          : t('train.busRoutesNone');
-      }
-      $('train-line').hidden = false;
-
-      // The interactive filter: the robot asks which way, then — once it
-      // knows — turns the question into a confirmation for you to check
-      // against the real train.
-      var opts = directionOptions(here, state.train.stations || []);
-      renderDirections(opts, trainHeading());
-      $('train-directions').hidden = opts.length < 2;
-
-      var toward = stops.length ? stops[stops.length - 1].name : null;
-      if (!haveDir) {
-        $('train-ask').textContent = t('train.whichWay');
-      } else if (toward) {
-        $('train-ask').textContent = t('train.confirmAsk', { stop: toward });
-      } else {
-        $('train-ask').textContent = t('train.confirmNoStops');
-      }
-
-      // The stopping-pattern filter only makes sense for rail: OSM has no
-      // honest basis for "this bus skips stops" the way railway=halt does.
-      $('train-pattern').hidden = !haveDir || mode !== 'rail';
-      $('train-pattern-all').classList.toggle('is-active', state.train.stopPattern !== 'fast');
-      $('train-pattern-fast').classList.toggle('is-active', state.train.stopPattern === 'fast');
-
-      var far = stops.length ? stops[stops.length - 1] : null;
-      $('train-direction').hidden = !far;
-      if (far) $('train-direction').textContent = t('train.towards', { stop: far.name });
-    } else {
-      $('train-status').textContent = state.train.failed
-        ? t('train.lookupFailed')
-        : (state.train.busy ? t('train.searching') : t('train.noTrack'));
-    }
-
-    $('train-speed').textContent = formatSpeed(speed);
-    $('train-next').textContent = stops.length ? stops[0].name : '—';
-
-    var list = $('train-stops');
-    $('train-stops-empty').hidden = stops.length > 0;
-    $('train-stops-empty').textContent = (known && !haveDir) ? t('train.pickDirection') : t('train.noStops');
-    list.innerHTML = stops.map(function (s) {
-      return '<li class="train-stop">' +
-        '<span class="train-stop-name">' + escapeHtml(s.name) + '</span>' +
-        '<span class="train-stop-meta">' + escapeHtml(formatDistance(s.distance)) +
-          (s.eta != null ? ' · ' + escapeHtml(formatEta(s.eta)) : '') +
-        '</span>' +
-      '</li>';
-    }).join('');
+    $('train-body').hidden = !state.prefs.trainMode;
   }
 
   /* ------------------------------------------------------- live vehicles */
@@ -1665,6 +1217,7 @@
 
   function openVehicleCard(v) {
     var host = $('veh-card');
+    clearSearchPin();
     var wasOpen = !host.hidden && !host.classList.contains('is-leaving');
     clearTimeout(state.vcard.leaveTimer);
     host.classList.remove('is-leaving');
@@ -1673,6 +1226,7 @@
     state.vcard.id = v.id;
     state.vcard.last = v;
     state.vcard.html = '';
+    state.vcard.pinSeen = false;
     selectVehicleMarker(v.id);
     // First open: the card springs up and its rows cascade in. Switching to
     // another vehicle while open: just a quick cross-fade, no re-entrance.
@@ -1691,7 +1245,7 @@
     var n = 0;
     state.vcard.timer = setInterval(function () {
       n++;
-      if (n % 6 === 0) loadTrip(state.vcard.id, true);
+      if (n % 6 === 0 || (state.vcard.pin && n % 2 === 0)) loadTrip(state.vcard.id, true);
       renderVehicleCard();
     }, 5000);
   }
@@ -1711,6 +1265,7 @@
       host.style.removeProperty('translate');
       host.style.removeProperty('transition');
       state.vcard.html = '';
+      clearSearchPin();
     };
     if (instant === true || host.hidden || window.matchMedia('(prefers-reduced-motion: reduce)').matches) { finish(); return; }
     host.classList.add('is-leaving');
@@ -1729,6 +1284,16 @@
       })
       .then(function (data) {
         tripCache[id] = { at: Date.now(), trip: data.trip || data };
+        var loc = tripCache[id].trip.currentLocation;
+        if (state.vcard.id === id && state.vcard.pin && loc && loc.latitude != null) {
+          var first = !state.vcard.pinSeen;
+          state.vcard.pinSeen = true;
+          map.setMarkerPosition('search:pin', loc.latitude, loc.longitude);
+          map.refreshMarkers();
+          if (first && state.vcard.last && state.vcard.last.fromDeparture) {
+            map.setView(loc.latitude, loc.longitude, null, { animate: true, duration: 800 });
+          }
+        }
       })
       .catch(function () {
         // Keep an older successful answer rather than replace it with an error.
@@ -1854,6 +1419,271 @@
     }).join('') + '</ol>';
   }
 
+
+  /* ------------------------------------------------------ transit search */
+
+  /* Search for a train, tram or U-Bahn line, a destination, or a station.
+   *  - Trains: one snapshot of every train, tram and U-Bahn in Austria,
+   *    fetched in a few parallel pieces the first time the field is used and
+   *    kept for a minute. Matching happens on the phone, so typing is instant.
+   *  - Stations: the timetable's own station search. Tapping a station lists
+   *    its next departures, and tapping a departure opens that train's card. */
+  var TS_TTL = 60000;
+  var TS_LAT = [46.3, 47.7, 49.1];
+  var TS_LNG = [9.5, 11.5, 13.5, 15.5, 17.2];
+  var TS = {
+    index: [], at: 0, loading: false, failed: false,
+    stops: [], stopsFor: '', stopsPending: false, stopsFailed: false,
+    seq: 0, timer: null, station: null
+  };
+
+  function tsLoadIndex(force) {
+    if (TS.loading) return;
+    if (!force && TS.index.length && Date.now() - TS.at < TS_TTL) return;
+    TS.loading = true;
+    TS.failed = false;
+    var jobs = [];
+    for (var i = 0; i < TS_LAT.length - 1; i++) {
+      for (var j = 0; j < TS_LNG.length - 1; j++) {
+        jobs.push({ s: TS_LAT[i], n: TS_LAT[i + 1], w: TS_LNG[j], e: TS_LNG[j + 1] });
+      }
+    }
+    var okCount = 0, all = [];
+    Promise.all(jobs.map(function (b) {
+      var url = LIVE_URL + '?north=' + b.n + '&south=' + b.s + '&west=' + b.w + '&east=' + b.e +
+        '&results=1000&duration=0&frames=1&polylines=false&_=' + Date.now() + Math.floor(Math.random() * 1000);
+      return fetch(url, { cache: 'no-store' })
+        .then(function (r) { if (!r.ok) throw new Error('radar ' + r.status); return r.json(); })
+        .then(function (d) { okCount++; return (d && d.movements) || []; })
+        .catch(function () { return []; });
+    })).then(function (parts) {
+      var seen = {};
+      parts.forEach(function (list) {
+        list.forEach(function (m) {
+          var kind = liveKind(m.line);
+          if (!kind || !m.location || m.location.latitude == null || seen[m.tripId]) return;
+          seen[m.tripId] = true;
+          var name = (m.line && m.line.name) || '';
+          var dir = m.direction || '';
+          all.push({
+            id: m.tripId, kind: kind, name: name, short: liveShortName(m.line, kind),
+            direction: dir, lat: m.location.latitude, lng: m.location.longitude,
+            t0: Date.now(), path: [{ lat: m.location.latitude, lng: m.location.longitude }], step: 1000,
+            next: (m.nextStopovers || []).slice(0, 6).map(function (x) {
+              return { stop: { name: (x.stop && x.stop.name) || '' }, arrival: x.arrival, departure: x.departure,
+                arrivalDelay: x.arrivalDelay, departureDelay: x.departureDelay, cancelled: x.cancelled };
+            }),
+            nameKey: name.toLowerCase().replace(/[\s.\-]/g, ''),
+            shortKey: liveShortName(m.line, kind).toLowerCase(),
+            text: (name + ' ' + dir).toLowerCase()
+          });
+        });
+      });
+      if (okCount === 0) { TS.failed = true; } else { TS.index = all; TS.at = Date.now(); }
+      TS.loading = false;
+      tsRender();
+    });
+  }
+
+  function tsMatch(q) {
+    var qn = q.replace(/[\s.\-]/g, '');
+    var tokens = q.split(/\s+/).filter(Boolean);
+    var c = map.getView();
+    var out = [];
+    TS.index.forEach(function (v) {
+      var score = 0;
+      if (qn === v.shortKey) score = 100;
+      else if (v.nameKey.indexOf(qn) === 0 || v.nameKey.replace(/^(tram|bus)/, '').indexOf(qn) === 0) score = 85;
+      else if (v.nameKey.indexOf(qn) > -1) score = 70;
+      else if (tokens.every(function (tk) { return v.text.indexOf(tk) > -1; })) score = 50;
+      if (score) out.push({ v: v, score: score, d: distance(c, v) });
+    });
+    out.sort(function (a, b) { return b.score - a.score || a.d - b.d; });
+    return out.slice(0, 30);
+  }
+
+  function tsRef() {
+    var p = state.position && state.position.coords;
+    return p ? { lat: p.latitude, lng: p.longitude } : map.getView();
+  }
+
+  function tsRender() {
+    var input = $('ts-input');
+    var q = input.value.trim().toLowerCase();
+    $('ts-clear').hidden = !input.value;
+    var box = $('ts-results');
+    if (!q) { box.hidden = true; return; }
+    box.hidden = false;
+    $('ts-deps').hidden = true;
+
+    var ref = tsRef();
+    var hits = TS.index.length ? tsMatch(q) : [];
+    $('ts-trains-wrap').hidden = !hits.length;
+    $('ts-trains').innerHTML = hits.map(function (h, i) {
+      var v = h.v;
+      return '<li class="train-stop veh-item ts-item" tabindex="0" role="button" data-train="' + i + '">' +
+        '<span class="veh-badge mm-veh-' + v.kind + '">' + escapeHtml(v.short) + '</span>' +
+        '<span class="train-stop-name">' + escapeHtml(liveTypeLabel(v.kind) + ' → ' + cleanStopName(v.direction)) + '</span>' +
+        '<span class="train-stop-meta">' + escapeHtml(formatDistance(distance(ref, v))) + '</span></li>';
+    }).join('');
+    TS.hits = hits;
+
+    var stops = TS.stopsFor === q ? TS.stops : [];
+    $('ts-stops-wrap').hidden = !stops.length;
+    $('ts-stops').innerHTML = stops.map(function (s, i) {
+      return '<li class="train-stop ts-item" tabindex="0" role="button" data-stop="' + i + '">' +
+        '<span class="ts-pin" aria-hidden="true"></span>' +
+        '<span class="train-stop-name">' + escapeHtml(s.name) + '</span>' +
+        (s.location ? '<span class="train-stop-meta">' + escapeHtml(formatDistance(distance(ref, { lat: s.location.latitude, lng: s.location.longitude }))) + '</span>' : '') +
+      '</li>';
+    }).join('');
+
+    var status = '';
+    if (!hits.length && !stops.length) {
+      if (TS.loading || TS.stopsPending) status = TS.loading && !TS.index.length ? t('ts.loading') : t('ts.searching');
+      else if (TS.failed && TS.stopsFailed) status = t('ts.failed');
+      else status = t('ts.none');
+    } else if (TS.loading && !TS.index.length) {
+      status = t('ts.loading');
+    }
+    $('ts-status').textContent = status;
+    $('ts-status').hidden = !status;
+  }
+
+  function tsQueryStops(q) {
+    var my = ++TS.seq;
+    if (q.length < 2) { TS.stops = []; TS.stopsFor = ''; TS.stopsPending = false; tsRender(); return; }
+    TS.stopsPending = true;
+    TS.stopsFailed = false;
+    fetch(TRIP_URL.replace('/trips/', '/locations') + '?query=' + encodeURIComponent(q) +
+      '&results=6&fuzzy=true&stops=true&addresses=false&poi=false', { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('loc ' + r.status); return r.json(); })
+      .then(function (d) {
+        if (my !== TS.seq) return;
+        TS.stops = (d || []).filter(function (x) { return x && x.name && x.id && x.location; });
+        TS.stopsFor = q;
+      })
+      .catch(function () { if (my === TS.seq) { TS.stops = []; TS.stopsFor = q; TS.stopsFailed = true; } })
+      .then(function () { if (my === TS.seq) { TS.stopsPending = false; tsRender(); } });
+  }
+
+  // Bring a train into view and open its card. If it is not one of the live
+  // markers already on the map (transit mode off, or out of the loaded area),
+  // a temporary marker stands in for it.
+  function tsOpenVehicle(v) {
+    var live = findVehicle(v.id);
+    var target = live || v;
+    setSheetExpanded(false);
+    openVehicleCard(target);
+    if (!live) showSearchPin(v);
+    var z = map.getView().zoom;
+    if (z < 14.5) map.setView(target.lat, target.lng, 15);
+    else map.setView(target.lat, target.lng, null, { animate: true, duration: 700 });
+  }
+
+  function showSearchPin(v) {
+    var el = map.setMarker('search:pin', v.lat, v.lng, 'mm-marker-veh mm-veh-' + v.kind + ' is-selected',
+      liveTypeLabel(v.kind) + ' ' + v.short);
+    if (el.textContent !== v.short) el.textContent = v.short;
+    state.vcard.pin = true;
+  }
+
+  function clearSearchPin() {
+    if (!state.vcard.pin) return;
+    state.vcard.pin = false;
+    if (map) map.removeMarker('search:pin');
+  }
+
+  function tsOpenStation(stop) {
+    TS.station = stop;
+    var ll = stop.location ? { lat: stop.location.latitude, lng: stop.location.longitude } : null;
+    if (ll) map.setView(ll.lat, ll.lng, Math.max(16, Math.round(map.getView().zoom)));
+    $('ts-results').hidden = true;
+    $('ts-deps').hidden = false;
+    $('ts-dep-title').textContent = t('ts.depTitle') + ' · ' + stop.name;
+    $('ts-dep-list').innerHTML = '';
+    $('ts-dep-status').textContent = t('ts.searching');
+    $('ts-dep-status').hidden = false;
+    fetch(TRIP_URL.replace('/trips/', '/stops/') + encodeURIComponent(stop.id) +
+      '/departures?duration=90&results=40&remarks=false&stopovers=false&linesOfStops=false', { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('dep ' + r.status); return r.json(); })
+      .then(function (d) {
+        if (TS.station !== stop) return;
+        var deps = ((d && d.departures) || d || []).filter(function (x) { return x && x.line && liveKind(x.line); }).slice(0, 16);
+        TS.deps = deps;
+        $('ts-dep-status').textContent = deps.length ? '' : t('ts.noDeps');
+        $('ts-dep-status').hidden = !!deps.length;
+        $('ts-dep-list').innerHTML = deps.map(function (x, i) {
+          var kind = liveKind(x.line), short = liveShortName(x.line, kind);
+          var when = x.when || x.plannedWhen;
+          var delay = x.delay != null ? Math.round(x.delay / 60) : null;
+          return '<li class="train-stop veh-item ts-item" tabindex="0" role="button" data-dep="' + i + '">' +
+            '<span class="veh-badge mm-veh-' + kind + '">' + escapeHtml(short) + '</span>' +
+            '<span class="train-stop-name">' + escapeHtml(cleanStopName(x.direction || '')) + '</span>' +
+            '<span class="train-stop-meta ts-when">' + escapeHtml(clockTime(when)) +
+              (delay > 0 ? ' <em class="ts-late">+' + delay + '</em>' : '') +
+              (x.platform ? ' · ' + escapeHtml(t('ts.platform', { p: x.platform })) : '') + '</span></li>';
+        }).join('');
+      })
+      .catch(function () {
+        if (TS.station !== stop) return;
+        $('ts-dep-status').textContent = t('ts.failed');
+        $('ts-dep-status').hidden = false;
+      });
+  }
+
+  function wireTransitSearch() {
+    var input = $('ts-input');
+    input.addEventListener('focus', function () { tsLoadIndex(false); });
+    input.addEventListener('input', function () {
+      tsLoadIndex(false);
+      var q = input.value.trim().toLowerCase();
+      tsRender();
+      clearTimeout(TS.timer);
+      TS.timer = setTimeout(function () { tsQueryStops(q); }, 350);
+    });
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    });
+    $('ts-clear').addEventListener('click', function () {
+      input.value = '';
+      TS.stopsFor = '';
+      tsRender();
+      input.focus();
+    });
+    $('ts-back').addEventListener('click', function () {
+      TS.station = null;
+      tsRender();
+    });
+
+    function pick(e) {
+      var li = e.target.closest && e.target.closest('.ts-item');
+      if (!li) return;
+      if (li.dataset.train != null && TS.hits[+li.dataset.train]) {
+        input.blur();
+        tsOpenVehicle(TS.hits[+li.dataset.train].v);
+      } else if (li.dataset.stop != null) {
+        var q = input.value.trim().toLowerCase();
+        input.blur();
+        if (TS.stopsFor === q && TS.stops[+li.dataset.stop]) tsOpenStation(TS.stops[+li.dataset.stop]);
+      } else if (li.dataset.dep != null && TS.deps && TS.deps[+li.dataset.dep]) {
+        var x = TS.deps[+li.dataset.dep];
+        var kind = liveKind(x.line), st = TS.station && TS.station.location;
+        tsOpenVehicle({
+          id: x.tripId, kind: kind, name: x.line.name || '', short: liveShortName(x.line, kind),
+          direction: x.direction || '', lat: st ? st.latitude : map.getView().lat, lng: st ? st.longitude : map.getView().lng,
+          next: null, path: [], t0: Date.now(), step: 1000, fromDeparture: true
+        });
+      }
+    }
+    ['ts-trains', 'ts-stops', 'ts-dep-list'].forEach(function (id) {
+      $(id).addEventListener('click', pick);
+      $(id).addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(e); }
+      });
+    });
+  }
+
   /* Swipe the card down to dismiss it. It follows the finger one-to-one,
    * resists a little upward, and either flies off (fast or far enough) or
    * springs back. Only starts when the list is scrolled to the top, so
@@ -1916,7 +1746,6 @@
     if (state.tracking) appendTrackPoint(point);
     maybeLookUpStreet(point.lat, point.lng);
     maybeFetchWeather(point.lat, point.lng);
-    maybeQueryRailway(point.lat, point.lng);
 
     map.setMarker('me', point.lat, point.lng, 'mm-marker-me', t('now.youAreHere'), recenter ? null : { glide: 600 });
     map.setAccuracy(point.lat, point.lng, c.accuracy);
@@ -1931,11 +1760,6 @@
     renderPlaces();
     renderTrain();
     if (state.prefs.trainMode) renderVehicles();
-    // Kept behind the same threshold the heading fallback needs, so a fix
-    // that has barely moved doesn't overwrite the one useful reference point.
-    if (!state.train.prevPoint || distance(state.train.prevPoint, point) > 60) {
-      state.train.prevPoint = { lat: point.lat, lng: point.lng };
-    }
     notifyPositionListeners({ lat: point.lat, lng: point.lng });
     syncHash();
   }
@@ -2778,6 +2602,7 @@
     // (language switch, Friends tab showing up after sign-in, rotation).
     wireSegDrag();
     wireVehicleCardDrag();
+    wireTransitSearch();
     var segRefresh = function () { moveSegPill(false); };
     window.addEventListener('resize', segRefresh);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(segRefresh);
@@ -2843,9 +2668,6 @@
     $('train-toggle').addEventListener('click', function () {
       setTrainMode(!state.prefs.trainMode);
     });
-
-    $('train-pattern-all').addEventListener('click', function () { setTrainPattern('all'); });
-    $('train-pattern-fast').addEventListener('click', function () { setTrainPattern('fast'); });
 
     $('copy').addEventListener('click', function () {
       if (!state.position) { toast(t('toast.noFix')); return; }
@@ -3098,6 +2920,7 @@
       renderCompass();
       renderWeather();
       renderTrain();
+      tsRender();
       renderPlaces();
       if (state.position) renderNow(); else renderSheetSummary();
       renderTrip();
