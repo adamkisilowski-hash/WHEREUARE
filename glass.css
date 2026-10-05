@@ -862,3 +862,101 @@ input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px 
   .tab-panel.is-active > *, .vc-stop, .veh-item, .mm-marker-veh, .sheet-grip,
   .sheet-status-dot.is-live, .live-dot { animation: none !important; }
 }
+
+/* ===================================================== vehicle card, smooth
+ * The card sits above a map full of moving markers, so it must not ask the
+ * GPU to re-blur that every frame: it gets a dense, steady tint instead.
+ * It also lives on its own compositor layer, enters and leaves with a real
+ * transition, and only animates the parts that are actually new. */
+.veh-card {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background:
+    radial-gradient(130% 90% at 0% 0%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 62%),
+    color-mix(in srgb, var(--bg) 93%, transparent);
+  contain: layout paint;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: none;
+  animation: none;
+  transform: translateX(-50%);
+  transition: translate 0.45s var(--spring);
+}
+.veh-card.is-scrollable { touch-action: pan-y; }
+.veh-card.is-entering { animation: card-up 0.5s var(--spring) both; }
+.veh-card.is-swapping > * { animation: swap-fade 0.28s var(--ease-out) both; }
+.veh-card.is-leaving { animation: card-down 0.26s cubic-bezier(0.4, 0, 1, 1) both; pointer-events: none; }
+
+@keyframes card-down {
+  from { opacity: 1; translate: 0 0; scale: 1; }
+  to { opacity: 0; translate: 0 28px; scale: 0.96; }
+}
+@keyframes swap-fade {
+  from { opacity: 0; translate: 0 6px; }
+  to { opacity: 1; translate: 0 0; }
+}
+
+/* Rows cascade only while the card is arriving, not on every refresh. */
+.vc-stop, .veh-card .vc-stops li { animation: none; }
+.veh-card.is-entering .vc-stops li { animation: rise-in 0.4s var(--ease-out) both; }
+.veh-card.is-entering .vc-stops li:nth-child(1) { animation-delay: 0.12s; }
+.veh-card.is-entering .vc-stops li:nth-child(2) { animation-delay: 0.17s; }
+.veh-card.is-entering .vc-stops li:nth-child(3) { animation-delay: 0.22s; }
+.veh-card.is-entering .vc-stops li:nth-child(4) { animation-delay: 0.27s; }
+.veh-card.is-entering .vc-stops li:nth-child(5) { animation-delay: 0.32s; }
+
+/* While the trip is loading, a shimmering placeholder holds the exact
+   height of the route block, so nothing jumps when the real data lands. */
+.vc-skeleton {
+  position: relative;
+  min-height: 92px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  border-radius: 18px;
+  border: none;
+}
+.vc-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 20%, color-mix(in srgb, var(--text) 9%, transparent) 50%, transparent 80%);
+  translate: -100% 0;
+  animation: shimmer 1.3s ease-in-out infinite;
+}
+@keyframes shimmer { to { translate: 100% 0; } }
+
+/* The route block fades in once the real data replaces the placeholder. */
+.vc-route:not(.vc-skeleton) { animation: swap-fade 0.35s var(--ease-out) both; }
+
+/* A little grabber to hint that the card can be swiped away. */
+.veh-card::before {
+  content: "";
+  display: block;
+  width: 36px;
+  height: 4px;
+  margin: -4px auto 10px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text) 22%, transparent);
+}
+
+/* Selected-vehicle ring on the compositor: scale + opacity only, no
+   box-shadow repaint every frame. */
+.mm-marker-veh.is-selected { animation: veh-pop 0.45s var(--spring) both; }
+.mm-marker-veh.is-selected::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: inherit;
+  border: 2px solid var(--accent);
+  pointer-events: none;
+  animation: ring-pulse 1.8s ease-out infinite;
+}
+@keyframes ring-pulse {
+  0% { opacity: 0.85; scale: 0.85; }
+  100% { opacity: 0; scale: 1.7; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .veh-card.is-entering, .veh-card.is-swapping > *, .veh-card.is-leaving,
+  .veh-card.is-entering .vc-stops li, .vc-shimmer, .vc-route,
+  .mm-marker-veh.is-selected::after { animation: none !important; }
+}

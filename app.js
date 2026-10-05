@@ -1391,7 +1391,15 @@
         t0: sentAt,
         step: LIVE_HORIZON * 1000 / LIVE_FRAMES,
         blend: null,
-        adopted: false
+        adopted: false,
+        next: (m.nextStopovers || []).slice(0, 6).map(function (x) {
+          return {
+            stop: { name: (x.stop && x.stop.name) || '' },
+            arrival: x.arrival, departure: x.departure,
+            arrivalDelay: x.arrivalDelay, departureDelay: x.departureDelay,
+            cancelled: x.cancelled
+          };
+        })
       };
     }).filter(Boolean);
   }
@@ -1477,6 +1485,14 @@
       state.veh.raf = 0;
       if (!state.prefs.trainMode || !state.veh.vehicles.length) return;
       var now = Date.now();
+      // Vehicles creep a fraction of a pixel per frame; moving them ~20x a
+      // second looks identical but saves the GPU re-blurring the glass above.
+      if (state.veh.lastTick && now - state.veh.lastTick < 48 && !state.veh.forceTick) {
+        state.veh.raf = requestAnimationFrame(step);
+        return;
+      }
+      state.veh.lastTick = now;
+      state.veh.forceTick = false;
       var moving = false;
       state.veh.vehicles.forEach(function (v) {
         var p = pathPosition(v, now);
@@ -1595,7 +1611,7 @@
   var TAP_RADIUS = 30;       // px — fat-finger forgiveness
   var NEXT_STOPS = 5;
   var tripCache = {};        // tripId -> { at, trip } | { at, failed }
-  state.vcard = { id: null, timer: null, loading: false };
+  state.vcard = { id: null, timer: null, loading: {}, leaveTimer: null, html: '' };
 
   function cleanStopName(name) {
     return String(name || '')
@@ -1647,9 +1663,25 @@
   }
 
   function openVehicleCard(v) {
+    var host = $('veh-card');
+    var wasOpen = !host.hidden && !host.classList.contains('is-leaving');
+    clearTimeout(state.vcard.leaveTimer);
+    host.classList.remove('is-leaving');
+    host.style.removeProperty('translate');
+    host.style.removeProperty('transition');
     state.vcard.id = v.id;
     state.vcard.last = v;
+    state.vcard.html = '';
     selectVehicleMarker(v.id);
+    // First open: the card springs up and its rows cascade in. Switching to
+    // another vehicle while open: just a quick cross-fade, no re-entrance.
+    host.classList.toggle('is-entering', !wasOpen);
+    host.classList.toggle('is-swapping', wasOpen);
+    clearTimeout(state.vcard.settleTimer);
+    state.vcard.settleTimer = setTimeout(function () {
+      host.classList.remove('is-entering', 'is-swapping');
+    }, 900);
+    host.scrollTop = 0;
     renderVehicleCard();
     loadTrip(v.id, false);
     clearInterval(state.vcard.timer);
@@ -1663,21 +1695,32 @@
     }, 5000);
   }
 
-  function closeVehicleCard() {
+  function closeVehicleCard(instant) {
     if (!state.vcard.id) return;
+    var host = $('veh-card');
     state.vcard.id = null;
     clearInterval(state.vcard.timer);
     state.vcard.timer = null;
     selectVehicleMarker(null);
-    $('veh-card').hidden = true;
-    $('veh-card').innerHTML = '';
+    clearTimeout(state.vcard.leaveTimer);
+    var finish = function () {
+      host.hidden = true;
+      host.innerHTML = '';
+      host.classList.remove('is-leaving', 'is-entering', 'is-swapping');
+      host.style.removeProperty('translate');
+      host.style.removeProperty('transition');
+      state.vcard.html = '';
+    };
+    if (instant === true || host.hidden || window.matchMedia('(prefers-reduced-motion: reduce)').matches) { finish(); return; }
+    host.classList.add('is-leaving');
+    state.vcard.leaveTimer = setTimeout(finish, 260);
   }
 
   function loadTrip(id, force) {
     var cached = tripCache[id];
     if (!force && cached && !cached.failed && Date.now() - cached.at < 25000) return;
-    if (state.vcard.loading && !force) return;
-    state.vcard.loading = true;
+    if (state.vcard.loading[id]) return;
+    state.vcard.loading[id] = true;
     fetch(TRIP_URL + encodeURIComponent(id) + '?stopovers=true&remarks=false&polyline=false', { cache: 'no-store' })
       .then(function (r) {
         if (!r.ok) throw new Error('trip failed: ' + r.status);
@@ -1691,7 +1734,7 @@
         if (!tripCache[id] || tripCache[id].failed) tripCache[id] = { at: Date.now(), failed: true };
       })
       .then(function () {
-        state.vcard.loading = false;
+        state.vcard.loading[id] = false;
         if (state.vcard.id === id) renderVehicleCard();
       });
   }
@@ -1748,8 +1791,17 @@
       '</div>';
 
     var body;
-    if (!entry) {
-      body = '<p class="vc-note">' + escapeHtml(t('veh.loading')) + '</p>';
+    if (!entry && v.next && v.next.length) {
+      // The trip request is still on its way, but the radar already named
+      // the next stops: show those straight away instead of a blank card.
+      var soon = upcomingStops({ stopovers: v.next }).slice(0, NEXT_STOPS);
+      body =
+        '<div class="vc-route vc-skeleton" aria-busy="true"><span class="vc-shimmer"></span></div>' +
+        '<h3 class="vc-sub">' + escapeHtml(t('veh.nextStops')) + '</h3>' +
+        stopListHtml(soon);
+    } else if (!entry) {
+      body = '<div class="vc-route vc-skeleton" aria-busy="true"><span class="vc-shimmer"></span></div>' +
+        '<p class="vc-note">' + escapeHtml(t('veh.loading')) + '</p>';
     } else if (entry.failed) {
       body = '<p class="vc-note">' + escapeHtml(t('veh.failed')) + '</p>';
     } else {
@@ -1769,22 +1821,82 @@
             '<span class="vc-time">' + escapeHtml(t('veh.arr')) + ' ' + escapeHtml(clockTime(dest.at)) + ' ' + delayChip(dest.delay) + '</span></div>' +
         '</div>' +
         '<h3 class="vc-sub">' + escapeHtml(t('veh.nextStops')) + '</h3>' +
-        (next.length
-          ? '<ol class="vc-stops">' + next.map(function (s, i) {
-              var when = s.arrival || s.departure;
-              var mins = Math.round((new Date(when).getTime() - Date.now()) / 60000);
-              return '<li' + (i === 0 ? ' class="is-next"' : '') + '>' +
-                '<span class="vc-stop-name" title="' + escapeHtml(s.stop.name) + '">' + escapeHtml(cleanStopName(s.stop.name)) + '</span>' +
-                '<span class="vc-stop-time">' + escapeHtml(clockTime(when)) +
-                  (mins > 0 && mins < 60 ? ' <em>' + escapeHtml(t('time.etaMin', { n: mins })) + '</em>' : '') + '</span>' +
-              '</li>';
-            }).join('') + '</ol>'
-          : '<p class="vc-note">' + escapeHtml(t('veh.lastStop')) + '</p>');
+        (next.length ? stopListHtml(next) : '<p class="vc-note">' + escapeHtml(t('veh.lastStop')) + '</p>');
     }
 
-    host.innerHTML = head + body;
+    var html = head + body;
+    // Nothing changed since the last pass (the common case on the 5 s
+    // refresh): leave the DOM alone, so there is no flicker, no restarted
+    // animation and no lost scroll position.
+    if (html === state.vcard.html && !host.hidden) return;
+    state.vcard.html = html;
+    var keep = host.scrollTop;
+    host.innerHTML = html;
     host.hidden = false;
-    $('vc-close').addEventListener('click', closeVehicleCard);
+    host.scrollTop = keep;
+    // Only a card taller than its limit scrolls; otherwise vertical touch
+    // belongs to the swipe-to-dismiss gesture.
+    host.classList.toggle('is-scrollable', host.scrollHeight > host.clientHeight + 2);
+    $('vc-close').addEventListener('click', function () { closeVehicleCard(); });
+  }
+
+  function stopListHtml(next) {
+    if (!next.length) return '<p class="vc-note">' + escapeHtml(t('veh.lastStop')) + '</p>';
+    return '<ol class="vc-stops">' + next.map(function (s, i) {
+      var when = s.arrival || s.departure;
+      var mins = Math.round((new Date(when).getTime() - Date.now()) / 60000);
+      return '<li' + (i === 0 ? ' class="is-next"' : '') + '>' +
+        '<span class="vc-stop-name" title="' + escapeHtml(s.stop.name) + '">' + escapeHtml(cleanStopName(s.stop.name)) + '</span>' +
+        '<span class="vc-stop-time">' + escapeHtml(clockTime(when)) +
+          (mins > 0 && mins < 60 ? ' <em>' + escapeHtml(t('time.etaMin', { n: mins })) + '</em>' : '') + '</span>' +
+      '</li>';
+    }).join('') + '</ol>';
+  }
+
+  /* Swipe the card down to dismiss it. It follows the finger one-to-one,
+   * resists a little upward, and either flies off (fast or far enough) or
+   * springs back. Only starts when the list is scrolled to the top, so
+   * scrolling a long stop list still works. */
+  function wireVehicleCardDrag() {
+    var host = $('veh-card');
+    var startY = 0, dy = 0, active = false, t0 = 0, pid = null;
+    host.addEventListener('pointerdown', function (e) {
+      if (e.target.closest('button') || host.scrollTop > 0) return;
+      active = true; pid = e.pointerId; startY = e.clientY; dy = 0; t0 = performance.now();
+    });
+    host.addEventListener('pointermove', function (e) {
+      if (!active || e.pointerId !== pid) return;
+      var d = e.clientY - startY;
+      if (Math.abs(d) < 6 && dy === 0) return;
+      if (dy === 0) {
+        try { host.setPointerCapture(pid); } catch (err) { /* gone */ }
+        host.style.transition = 'none';
+      }
+      dy = d > 0 ? d : d / 4;                  // rubber-band upwards
+      host.style.translate = '0 ' + dy + 'px';
+    });
+    function end(e) {
+      if (!active || (e && e.pointerId !== pid)) return;
+      active = false;
+      if (dy === 0) return;
+      var v = dy / Math.max(1, performance.now() - t0);   // px per ms
+      host.style.transition = '';
+      if (dy > 70 || v > 0.5) {
+        host.style.transition = 'translate 0.22s cubic-bezier(0.4, 0, 1, 1), opacity 0.22s';
+        host.style.translate = '0 ' + Math.max(dy + 160, 220) + 'px';
+        host.style.opacity = '0';
+        setTimeout(function () {
+          host.style.removeProperty('opacity');
+          closeVehicleCard(true);
+        }, 220);
+      } else {
+        host.style.transition = 'translate 0.45s cubic-bezier(0.22, 1.25, 0.36, 1)';
+        host.style.translate = '0 0';
+      }
+      dy = 0;
+    }
+    host.addEventListener('pointerup', end);
+    host.addEventListener('pointercancel', end);
   }
 
   function handlePosition(pos, recenter) {
@@ -2614,6 +2726,7 @@
     // The lens has to follow the tabs whenever they change size or appear
     // (language switch, Friends tab showing up after sign-in, rotation).
     wireSegDrag();
+    wireVehicleCardDrag();
     var segRefresh = function () { moveSegPill(false); };
     window.addEventListener('resize', segRefresh);
     if (window.MutationObserver) {
