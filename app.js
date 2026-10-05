@@ -2554,14 +2554,39 @@
     pill.style.transform = 'translate3d(' + seg.x + 'px,0,0)';
     // Stretch along the direction of travel, squash a touch across it, so
     // the lens reads as a droplet in motion; "grab" is the held-swell.
-    var st = Math.min(Math.abs(seg.vx) / 2600, 0.2);
+    var st = Math.min(Math.abs(seg.vx) / 3400, 0.12);
     pill.style.scale = (seg.grab * (1 + st)) + ' ' + (seg.grab * (1 - st * 0.45));
   }
 
+  // Soft, nearly critically damped spring (damping ratio ~0.9): it glides in
+  // and settles with just a whisper of overshoot. Integrated in small fixed
+  // steps so a slow frame can never make it jitter or blow up.
   function segSpring(p, v, target, k, c, dt) {
-    var a = -k * (p - target) - c * v;
-    v += a * dt;
-    return [p + v * dt, v];
+    var h = 1 / 240, n = Math.max(1, Math.round(dt / h)), step = dt / n;
+    for (var i = 0; i < n; i++) {
+      v += (-k * (p - target) - c * v) * step;
+      p += v * step;
+    }
+    return [p, v];
+  }
+
+  // Where the lens should sit for a tab: exactly centred on the word itself
+  // (measured from the text, not the button), as wide as the tab.
+  function segSlot(tab) {
+    var nav = $('tabs');
+    var w = tab.offsetWidth;
+    var node = tab.firstChild;
+    if (node && node.nodeType === 3 && node.textContent.trim()) {
+      var range = document.createRange();
+      range.selectNodeContents(node);
+      var tr = range.getBoundingClientRect();
+      if (tr.width) {
+        var nr = nav.getBoundingClientRect();
+        var center = tr.left - nr.left - nav.clientLeft + nav.scrollLeft + tr.width / 2;
+        return { left: center - w / 2, width: w };
+      }
+    }
+    return { left: tab.offsetLeft, width: w };
   }
 
   function segFrame(now) {
@@ -2578,12 +2603,12 @@
       if (cx < px.left + 28) nav.scrollLeft -= 9;
       else if (cx > px.right - 28) nav.scrollLeft += 9;
     } else {
-      r = segSpring(seg.x, seg.vx, seg.tx, 520, 30, dt);
+      r = segSpring(seg.x, seg.vx, seg.tx, 380, 35, dt);
       seg.x = r[0]; seg.vx = r[1];
     }
-    r = segSpring(seg.w, seg.vw, seg.tw, 520, 32, dt);
+    r = segSpring(seg.w, seg.vw, seg.tw, 380, 35, dt);
     seg.w = r[0]; seg.vw = r[1];
-    r = segSpring(seg.grab, seg.vg, seg.grabT, 600, 28, dt);
+    r = segSpring(seg.grab, seg.vg, seg.grabT, 520, 36, dt);
     seg.grab = r[0]; seg.vg = r[1];
     segRender();
 
@@ -2612,8 +2637,9 @@
     var active = nav.querySelector('.tab.is-active');
     if (!active || active.hidden || !active.offsetWidth) { pill.style.opacity = '0'; return; }
     pill.style.opacity = '1';
-    seg.tx = active.offsetLeft;
-    seg.tw = active.offsetWidth;
+    var slot = segSlot(active);
+    seg.tx = slot.left;
+    seg.tw = slot.width;
 
     if (!animate || !seg.ready) {
       seg.x = seg.tx; seg.w = seg.tw; seg.vx = seg.vw = 0;
@@ -2754,6 +2780,8 @@
     wireVehicleCardDrag();
     var segRefresh = function () { moveSegPill(false); };
     window.addEventListener('resize', segRefresh);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(segRefresh);
+    window.addEventListener('load', segRefresh);
     if (window.MutationObserver) {
       new MutationObserver(segRefresh).observe($('tabs'), { attributes: true, attributeFilter: ['hidden'], subtree: true, childList: true, characterData: true });
     }

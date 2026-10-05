@@ -1024,3 +1024,34 @@ input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px 
 @media (max-width: 480px) {
   .panel-head { padding-right: 64px; }
 }
+
+
+/* ======================================================= smoother slider
+ * The lens no longer blurs what is behind it: re-blurring a moving element
+ * every frame is what made the bar stutter on phones. It keeps the glass
+ * look through its fill and highlights instead. Weight never changes
+ * between tabs, so no label ever reflows while the lens is travelling. */
+.seg-pill {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  contain: layout paint style;
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
+}
+.tabs.seg .tab,
+.tabs.seg .tab.is-active { font-weight: 600; letter-spacing: -0.005em; }
+.tabs.seg .tab { transition: color 0.3s ease, transform 0.3s var(--spring); }
+.tabs.seg { contain: layout paint; }
+
+/* Panels change over with a short, light fade-and-slide; the old cascade on
+   every child ran alongside the lens and cost frames. */
+.tab-panel.is-active { animation-duration: 0.32s; }
+.tab-panel.is-active > * { animation: none; }
+@keyframes panel-fwd {
+  from { opacity: 0; transform: translate3d(14px, 0, 0); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes panel-back {
+  from { opacity: 0; transform: translate3d(-14px, 0, 0); }
+  to { opacity: 1; transform: none; }
+}
