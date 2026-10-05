@@ -1558,10 +1558,16 @@
   /* CARTO's Positron and Dark Matter, at @2x so the labels stay sharp on
    * dense screens. A native dark basemap beats inverting a light one: an
    * inverted map gets the ground right but turns every label into a
-   * photographic negative. */
+   * photographic negative.
+   *
+   * CARTO requires an API key on basemaps.cartocdn.com (since Aug 2026);
+   * without one every tile carries an "API KEY REQUIRED" watermark. This is
+   * a client-side key meant to be public — restrict it to this site's
+   * domain in the CARTO basemaps dashboard. */
+  var CARTO_KEY = 'cb1_4apb_1_f02a21833f2f32466be96328';
   var BASEMAP = {
-    light: 'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png',
-    dark: 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'
+    light: 'https://basemaps.cartocdn.com/rastertiles/light_all/{z}/{x}/{y}@2x.png?key=' + CARTO_KEY,
+    dark: 'https://basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}@2x.png?key=' + CARTO_KEY
   };
 
   function prefersDark() {
