@@ -899,6 +899,27 @@
     return state.train.chosenBearing != null ? state.train.chosenBearing : trainHeading();
   }
 
+  /* What kind of service a station is for. U-Bahn stations are tagged
+   * railway=station + station=subway; tram stops railway=tram_stop. */
+  function stationKind(tags) {
+    if (tags.railway === 'tram_stop' || tags.station === 'tram') return 'tram';
+    if (tags.station === 'subway' || tags.subway === 'yes') return 'subway';
+    return 'rail';
+  }
+
+  /* Only the stops of the kind you're riding: on a tram the next "stop"
+   * shouldn't be an S-Bahn station two streets over, and on the U-Bahn it
+   * shouldn't be a tram stop above you. Falls back to everything if
+   * filtering would leave nothing. */
+  function stationsForTrack(stations, tags) {
+    var want = 'rail';
+    if (tags && tags.railway === 'tram') want = 'tram';
+    else if (tags && tags.railway === 'subway') want = 'subway';
+    else if (tags && tags.railway === 'light_rail') return stations;
+    var picked = stations.filter(function (s) { return s.kind === want; });
+    return picked.length ? picked : stations;
+  }
+
   function maybeQueryRailway(lat, lng) {
     if (!state.prefs.trainMode || state.train.busy) return;
     var last = state.train.queryPoint;
@@ -925,9 +946,11 @@
       'way(around:80,' + lat + ',' + lng + ')' +
       '["railway"~"^(rail|light_rail|subway|tram|narrow_gauge|monorail)$"]->.tracks;' +
       'node(around:15000,' + lat + ',' + lng + ')["railway"~"^(station|halt)$"]["name"]->.stops;' +
+      'node(around:3000,' + lat + ',' + lng + ')["railway"="tram_stop"]["name"]->.tramstops;' +
       'node(around:3000,' + lat + ',' + lng + ')["highway"="bus_stop"]->.busstops;' +
       '.tracks out tags 12;' +
       '.stops out 150;' +
+      '.tramstops out 150;' +
       '.busstops out tags 200;';
 
     fetch(OVERPASS_URL, {
@@ -945,7 +968,7 @@
         var stations = elements.filter(function (e) {
           return e.type === 'node' && e.tags && e.tags.name && e.lat != null && e.tags.railway;
         }).map(function (e) {
-          return { name: e.tags.name, lat: e.lat, lng: e.lon, railway: e.tags.railway };
+          return { name: e.tags.name, lat: e.lat, lng: e.lon, railway: e.tags.railway, kind: stationKind(e.tags) };
         });
         var busStops = elements.filter(function (e) {
           return e.type === 'node' && e.tags && e.tags.highway === 'bus_stop' && e.lat != null;
@@ -957,7 +980,7 @@
           // within 80 m is close to unambiguous, while a bus stop nearby
           // just means a stop is nearby, not that you're riding anything.
           state.train.mode = 'rail';
-          state.train.stations = stations;
+          state.train.stations = stationsForTrack(stations, state.train.track);
           state.train.busRoutes = [];
         } else {
           var here = { lat: lat, lng: lng };
@@ -1003,7 +1026,9 @@
       savePrefs();
       var c = state.position && state.position.coords;
       if (c) queryRailway(c.latitude, c.longitude);
+      startVehicles();
     } else {
+      stopVehicles();
       // Nothing about a mode you've left should linger on screen.
       state.train.track = null;
       state.train.stations = [];
@@ -1149,6 +1174,193 @@
     }).join('');
   }
 
+  /* ------------------------------------------------------- live vehicles */
+
+  /* Where the trains, trams and U-Bahns actually are right now. This comes
+   * from the ÖBB/VOR timetable system (HAFAS) via a public hafas-rest-api
+   * instance: positions are interpolated by the operator from real-time
+   * prognoses, so they're "where it should be now, delays included" rather
+   * than raw GPS — but they're real services with real line numbers, which
+   * is the one thing OpenStreetMap can't tell us. Covers Austria (and
+   * through-running trains). Buses are left out on purpose: they'd bury the
+   * map. Only polled while transit mode is on, the tab is visible and the
+   * map is zoomed in enough for the box to be a neighbourhood, not a
+   * country. */
+  var LIVE_URL = 'https://oebb.macistry.com/api/radar';
+  var LIVE_INTERVAL = 30000;   // matches the server's own cache lifetime
+  var LIVE_MIN_ZOOM = 13;
+  var LIVE_KINDS = {
+    nationalExpress: 'train', national: 'train', interregional: 'train',
+    regional: 'train', suburban: 'train', subway: 'subway', tram: 'tram'
+  };
+
+  state.veh = { vehicles: [], timer: null, moveTimer: null, busy: false, failed: false, at: 0, tooFar: false };
+
+  function liveKind(line) {
+    if (!line) return null;
+    var kind = LIVE_KINDS[line.product];
+    // Rail replacement buses are filed under the train product they replace.
+    if (kind === 'train' && /^bus/i.test(line.name || '')) return null;
+    return kind || null;
+  }
+
+  // "Tram 2" -> "2", "S 80" -> "S80", "RJX19915" -> "RJX"; short enough for a marker.
+  function liveShortName(line, kind) {
+    var name = (line && line.name) || '';
+    if (kind === 'tram') return name.replace(/^tram\s*/i, '') || 'T';
+    if (kind === 'subway') return name.replace(/\s+/g, '') || 'U';
+    var m = name.match(/^([A-Za-z]+)\s*(\d*)/);
+    if (!m) return name || 'Zug';
+    var prefix = m[1].toUpperCase(), num = m[2];
+    // Long-distance trains carry a train number, not a line number.
+    if (num && (num.length <= 3 || prefix === 'S')) return prefix + num;
+    return prefix;
+  }
+
+  // Delay, in minutes, at the next stop the vehicle hasn't reached yet.
+  function liveDelay(m) {
+    var now = Date.now();
+    var stops = m.nextStopovers || [];
+    for (var i = 0; i < stops.length; i++) {
+      var s = stops[i];
+      var when = s.departure || s.arrival;
+      if (!when || new Date(when).getTime() < now) continue;
+      var d = s.departureDelay != null ? s.departureDelay : s.arrivalDelay;
+      return d != null ? Math.round(d / 60) : null;
+    }
+    return null;
+  }
+
+  function mapBounds() {
+    var size = map.size();
+    var corners = [
+      map.pointToLatLng(0, 0), map.pointToLatLng(size.w, 0),
+      map.pointToLatLng(0, size.h), map.pointToLatLng(size.w, size.h)
+    ];
+    var b = { north: -90, south: 90, west: 180, east: -180 };
+    corners.forEach(function (c) {
+      b.north = Math.max(b.north, c.lat); b.south = Math.min(b.south, c.lat);
+      b.east = Math.max(b.east, c.lng); b.west = Math.min(b.west, c.lng);
+    });
+    return b;
+  }
+
+  function fetchVehicles() {
+    if (!state.prefs.trainMode || state.veh.busy) return;
+    if (document.hidden) return;
+    if (map.getView().zoom < LIVE_MIN_ZOOM) {
+      state.veh.tooFar = true;
+      state.veh.vehicles = [];
+      map.clearMarkers('veh:');
+      renderVehicles();
+      return;
+    }
+    state.veh.tooFar = false;
+    var b = mapBounds();
+    var url = LIVE_URL + '?north=' + b.north.toFixed(5) + '&south=' + b.south.toFixed(5) +
+      '&west=' + b.west.toFixed(5) + '&east=' + b.east.toFixed(5) +
+      '&results=1000&duration=30&frames=1&polylines=false';
+    state.veh.busy = true;
+    fetch(url)
+      .then(function (r) {
+        if (!r.ok) throw new Error('radar failed: ' + r.status);
+        return r.json();
+      })
+      .then(function (data) {
+        var list = (data && data.movements) || [];
+        var seen = {};
+        state.veh.vehicles = list.map(function (m) {
+          var kind = liveKind(m.line);
+          if (!kind || !m.location || m.location.latitude == null) return null;
+          if (seen[m.tripId]) return null;
+          seen[m.tripId] = true;
+          return {
+            id: m.tripId,
+            kind: kind,
+            name: (m.line && m.line.name) || '',
+            short: liveShortName(m.line, kind),
+            direction: m.direction || '',
+            lat: m.location.latitude,
+            lng: m.location.longitude,
+            delay: liveDelay(m)
+          };
+        }).filter(Boolean);
+        state.veh.failed = false;
+        state.veh.at = Date.now();
+        state.veh.busy = false;
+        drawVehicleMarkers();
+        renderVehicles();
+      })
+      .catch(function () {
+        state.veh.failed = true;
+        state.veh.busy = false;
+        renderVehicles();
+      });
+  }
+
+  function drawVehicleMarkers() {
+    map.clearMarkers('veh:');
+    if (!state.prefs.trainMode) return;
+    state.veh.vehicles.forEach(function (v) {
+      var label = t('live.kind.' + v.kind) + ' ' + v.short + ' → ' + v.direction;
+      var el = map.setMarker('veh:' + v.id, v.lat, v.lng, 'mm-marker-veh mm-veh-' + v.kind, label);
+      el.textContent = v.short;
+    });
+  }
+
+  function liveTypeLabel(kind) { return t('live.kind.' + kind); }
+
+  function renderVehicles() {
+    var host = $('veh-list');
+    if (!host) return;
+    var status = $('veh-status');
+    var c = state.position && state.position.coords;
+    var ref = c ? { lat: c.latitude, lng: c.longitude } : map.getView();
+    var items = state.veh.vehicles.map(function (v) {
+      return { v: v, d: distance(ref, v) };
+    }).sort(function (a, b) { return a.d - b.d; }).slice(0, 10);
+
+    if (state.veh.tooFar) status.textContent = t('live.zoomIn');
+    else if (state.veh.failed) status.textContent = t('live.failed');
+    else if (!state.veh.at) status.textContent = t('live.loading');
+    else if (!items.length) status.textContent = t('live.none');
+    else status.textContent = t('live.updated', { n: state.veh.vehicles.length });
+
+    host.innerHTML = items.map(function (it) {
+      var v = it.v;
+      var delay = v.delay == null ? '' : (v.delay > 0 ? ' · +' + v.delay + ' min' : ' · ' + t('live.onTime'));
+      return '<li class="train-stop veh-item">' +
+        '<span class="veh-badge mm-veh-' + v.kind + '">' + escapeHtml(v.short) + '</span>' +
+        '<span class="train-stop-name">' + escapeHtml(liveTypeLabel(v.kind)) + ' → ' + escapeHtml(v.direction) + '</span>' +
+        '<span class="train-stop-meta">' + escapeHtml(formatDistance(it.d)) + escapeHtml(delay) + '</span>' +
+      '</li>';
+    }).join('');
+  }
+
+  function startVehicles() {
+    stopVehicles();
+    fetchVehicles();
+    state.veh.timer = setInterval(fetchVehicles, LIVE_INTERVAL);
+  }
+
+  function stopVehicles() {
+    if (state.veh.timer) clearInterval(state.veh.timer);
+    if (state.veh.moveTimer) clearTimeout(state.veh.moveTimer);
+    state.veh.timer = null;
+    state.veh.moveTimer = null;
+    state.veh.vehicles = [];
+    state.veh.at = 0;
+    if (map) map.clearMarkers('veh:');
+    renderVehicles();
+  }
+
+  // Panning or zooming fetches the new area once the map settles.
+  function scheduleVehicles() {
+    if (!state.prefs.trainMode) return;
+    if (state.veh.moveTimer) clearTimeout(state.veh.moveTimer);
+    state.veh.moveTimer = setTimeout(fetchVehicles, 1200);
+  }
+
   function handlePosition(pos, recenter) {
     if (!recenter && isWorseFix(pos)) return;
     state.position = pos;
@@ -1177,6 +1389,7 @@
     renderNow();
     renderPlaces();
     renderTrain();
+    if (state.prefs.trainMode) renderVehicles();
     // Kept behind the same threshold the heading fallback needs, so a fix
     // that has barely moved doesn't overwrite the one useful reference point.
     if (!state.train.prevPoint || distance(state.train.prevPoint, point) > 60) {
@@ -2005,7 +2218,10 @@
     }, true);
 
     // Dragging the map means the user is looking somewhere else on purpose.
-    map.on('move', function () { syncHash(); });
+    map.on('move', function () { syncHash(); scheduleVehicles(); });
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden && state.prefs.trainMode) fetchVehicles();
+    });
     map.el.addEventListener('pointerdown', function () { state.followMe = false; });
 
     document.addEventListener('keydown', function (e) {
@@ -2046,6 +2262,7 @@
     if (state.prefs.trainMode) {
       map.setOverlayTileUrl(RAILWAY_TILES);
       $('tab-train').hidden = false;
+      setTimeout(startVehicles, 0);
     }
 
     // Remembers where you left the sheet and which tab was open.
@@ -2076,6 +2293,8 @@
       applyToggleLabels();
       applyPlacesEmptyText();
       renderLive();
+      renderVehicles();
+      drawVehicleMarkers();
       renderCompass();
       renderWeather();
       renderTrain();

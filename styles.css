@@ -1808,3 +1808,67 @@ body.is-immersive .sheet { display: none; }
      flush with the screen edges — just relax the corner radius to match. */
   .sheet { border-radius: 18px 18px 0 0; }
 }
+
+/* ------------------------------------------------------ live vehicles */
+/* Trains, trams and U-Bahns moving on the map. Kept monochrome like the
+   rest of the app, so the three kinds differ by shape instead of colour:
+   U-Bahn a solid square (the "U" sign), tram an outlined circle, train a
+   solid rounded pill. */
+.mm-marker-veh {
+  z-index: 1;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  margin: -11px 0 0 -11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25), 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.mm-veh-subway {
+  background: var(--text);
+  color: var(--bg);
+  border: 2px solid var(--bg);
+  border-radius: 4px;
+}
+
+.mm-veh-tram {
+  background: var(--surface);
+  color: var(--text);
+  border: 2px solid var(--text);
+  border-radius: 11px;
+}
+
+.mm-veh-train {
+  background: var(--text);
+  color: var(--bg);
+  border: 2px solid var(--bg);
+  border-radius: 11px;
+  outline: 1.5px solid var(--text);
+}
+
+.veh-status { margin: 0 0 8px; }
+
+.veh-item { align-items: center; }
+
+.veh-badge {
+  flex: none;
+  min-width: 24px;
+  height: 20px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.veh-item .train-stop-name { flex: 1; }
