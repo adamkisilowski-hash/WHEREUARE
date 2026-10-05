@@ -1411,6 +1411,7 @@
       if (!next[id]) map.removeMarker(id);
     });
     vehOnMap = next;
+    if (state.vcard && state.vcard.id) selectVehicleMarker(state.vcard.id);
   }
 
   function liveTypeLabel(kind) { return t('live.kind.' + kind); }
@@ -1451,6 +1452,7 @@
   function stopVehicles() {
     if (state.veh.timer) clearInterval(state.veh.timer);
     if (state.veh.moveTimer) clearTimeout(state.veh.moveTimer);
+    closeVehicleCard();
     if (state.veh.raf) cancelAnimationFrame(state.veh.raf);
     state.veh.timer = null;
     state.veh.moveTimer = null;
@@ -1467,6 +1469,210 @@
     if (!state.prefs.trainMode) return;
     if (state.veh.moveTimer) clearTimeout(state.veh.moveTimer);
     state.veh.moveTimer = setTimeout(fetchVehicles, 1200);
+  }
+
+  /* ------------------------------------------------------ vehicle details */
+
+  /* Tapping a train, tram or U-Bahn opens a small card: where it's going,
+   * where it came from, when it arrives, and the next five stops. The live
+   * radar only knows the next few stops, so the full run comes from a
+   * second request for that one trip (cached, refreshed while the card is
+   * open). Markers sit in a pointer-events:none layer, so taps are matched
+   * to the nearest vehicle in the map's own click handler instead. */
+  var TRIP_URL = 'https://oebb.macistry.com/api/trips/';
+  var TAP_RADIUS = 30;       // px — fat-finger forgiveness
+  var NEXT_STOPS = 5;
+  var tripCache = {};        // tripId -> { at, trip } | { at, failed }
+  state.vcard = { id: null, timer: null, loading: false };
+
+  function cleanStopName(name) {
+    return String(name || '')
+      .replace(/^Wien\s+/, '')
+      .replace(/\s*\([^)]*\)\s*$/, '')
+      .trim() || String(name || '');
+  }
+
+  function clockTime(iso) {
+    if (!iso) return '—';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '—';
+    var h = d.getHours(), m = d.getMinutes();
+    return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+  }
+
+  function delayChip(seconds) {
+    if (seconds == null) return '';
+    var min = Math.round(seconds / 60);
+    return min > 0
+      ? '<span class="vc-delay is-late">+' + min + ' min</span>'
+      : '<span class="vc-delay">' + escapeHtml(t('live.onTime')) + '</span>';
+  }
+
+  function findVehicle(id) {
+    for (var i = 0; i < state.veh.vehicles.length; i++) {
+      if (state.veh.vehicles[i].id === id) return state.veh.vehicles[i];
+    }
+    return null;
+  }
+
+  // Nearest shown vehicle to a tap, if one is close enough.
+  function vehicleAt(latlng) {
+    if (!state.prefs.trainMode) return null;
+    var tap = map.latLngToPoint(latlng.lat, latlng.lng);
+    var best = null, bestD = TAP_RADIUS;
+    state.veh.vehicles.forEach(function (v) {
+      var p = map.latLngToPoint(v.lat, v.lng);
+      var d = Math.hypot(p.x - tap.x, p.y - tap.y);
+      if (d <= bestD) { bestD = d; best = v; }
+    });
+    return best;
+  }
+
+  function selectVehicleMarker(id) {
+    Object.keys(map.markers).forEach(function (k) {
+      if (k.indexOf('veh:') === 0) map.markers[k].el.classList.toggle('is-selected', k === 'veh:' + id);
+    });
+  }
+
+  function openVehicleCard(v) {
+    state.vcard.id = v.id;
+    state.vcard.last = v;
+    selectVehicleMarker(v.id);
+    renderVehicleCard();
+    loadTrip(v.id, false);
+    clearInterval(state.vcard.timer);
+    // Re-evaluate "which stops are still ahead" every few seconds, and pull
+    // fresh delays every 30 s while the card stays open.
+    var n = 0;
+    state.vcard.timer = setInterval(function () {
+      n++;
+      if (n % 6 === 0) loadTrip(state.vcard.id, true);
+      renderVehicleCard();
+    }, 5000);
+  }
+
+  function closeVehicleCard() {
+    if (!state.vcard.id) return;
+    state.vcard.id = null;
+    clearInterval(state.vcard.timer);
+    state.vcard.timer = null;
+    selectVehicleMarker(null);
+    $('veh-card').hidden = true;
+    $('veh-card').innerHTML = '';
+  }
+
+  function loadTrip(id, force) {
+    var cached = tripCache[id];
+    if (!force && cached && !cached.failed && Date.now() - cached.at < 25000) return;
+    if (state.vcard.loading && !force) return;
+    state.vcard.loading = true;
+    fetch(TRIP_URL + encodeURIComponent(id) + '?stopovers=true&remarks=false&polyline=false', { cache: 'no-store' })
+      .then(function (r) {
+        if (!r.ok) throw new Error('trip failed: ' + r.status);
+        return r.json();
+      })
+      .then(function (data) {
+        tripCache[id] = { at: Date.now(), trip: data.trip || data };
+      })
+      .catch(function () {
+        // Keep an older successful answer rather than replace it with an error.
+        if (!tripCache[id] || tripCache[id].failed) tripCache[id] = { at: Date.now(), failed: true };
+      })
+      .then(function () {
+        state.vcard.loading = false;
+        if (state.vcard.id === id) renderVehicleCard();
+      });
+  }
+
+  // The stop the vehicle is heading for: first one whose (delay-adjusted)
+  // time hasn't passed yet, with a little grace so a stop it's standing at
+  // doesn't vanish the instant the clock ticks over.
+  function upcomingStops(trip) {
+    var cutoff = Date.now() - 20000;
+    var stops = trip.stopovers || [];
+    var out = [];
+    for (var i = 0; i < stops.length; i++) {
+      var s = stops[i];
+      if (s.cancelled) continue;
+      var when = s.arrival || s.departure;
+      if (!when) continue;
+      if (new Date(when).getTime() >= cutoff) out.push(s);
+    }
+    return out;
+  }
+
+  // The headsign names where the service is going ("Dornbach"); the trip's
+  // own last stop can be a stop or two further on. Prefer the stop that
+  // matches the headsign, fall back to the trip's end.
+  function pickDestination(trip, direction, ahead) {
+    var want = cleanStopName(direction).toLowerCase();
+    if (want) {
+      for (var i = ahead.length - 1; i >= 0; i--) {
+        var n = cleanStopName(ahead[i].stop.name).toLowerCase();
+        if (n === want || n.indexOf(want) === 0 || want.indexOf(n) === 0) {
+          return { name: ahead[i].stop.name, at: ahead[i].arrival || ahead[i].departure, delay: ahead[i].arrivalDelay };
+        }
+      }
+    }
+    return { name: trip.destination && trip.destination.name, at: trip.arrival, delay: trip.arrivalDelay };
+  }
+
+  function renderVehicleCard() {
+    var id = state.vcard.id;
+    var host = $('veh-card');
+    if (!id) return;
+    var v = findVehicle(id);
+    var entry = tripCache[id];
+    // The vehicle can leave the visible area; keep what we last knew.
+    if (!v) { v = state.vcard.last; } else { state.vcard.last = v; }
+    if (!v) { closeVehicleCard(); return; }
+
+    var head =
+      '<div class="vc-head">' +
+        '<span class="vc-badge mm-veh-' + v.kind + '">' + escapeHtml(v.short) + '</span>' +
+        '<div class="vc-title"><strong>' + escapeHtml(liveTypeLabel(v.kind) + ' ' + v.short) + '</strong>' +
+          '<span>' + escapeHtml(t('veh.toward', { dest: cleanStopName(v.direction) })) + '</span></div>' +
+        '<button type="button" class="vc-close" id="vc-close" aria-label="' + escapeHtml(t('veh.close')) + '">×</button>' +
+      '</div>';
+
+    var body;
+    if (!entry) {
+      body = '<p class="vc-note">' + escapeHtml(t('veh.loading')) + '</p>';
+    } else if (entry.failed) {
+      body = '<p class="vc-note">' + escapeHtml(t('veh.failed')) + '</p>';
+    } else {
+      var trip = entry.trip;
+      var ahead = upcomingStops(trip);
+      var dest = pickDestination(trip, v.direction, ahead);
+      var next = ahead.slice(0, NEXT_STOPS);
+      var from = trip.origin || {};
+      body =
+        '<div class="vc-route">' +
+          '<div class="vc-end"><span class="vc-label">' + escapeHtml(t('veh.from')) + '</span>' +
+            '<span class="vc-place">' + escapeHtml(cleanStopName(from.name)) + '</span>' +
+            '<span class="vc-time">' + escapeHtml(t('veh.dep')) + ' ' + escapeHtml(clockTime(trip.departure)) + '</span></div>' +
+          '<span class="vc-arrow" aria-hidden="true">→</span>' +
+          '<div class="vc-end"><span class="vc-label">' + escapeHtml(t('veh.dest')) + '</span>' +
+            '<span class="vc-place">' + escapeHtml(cleanStopName(dest.name)) + '</span>' +
+            '<span class="vc-time">' + escapeHtml(t('veh.arr')) + ' ' + escapeHtml(clockTime(dest.at)) + ' ' + delayChip(dest.delay) + '</span></div>' +
+        '</div>' +
+        '<h3 class="vc-sub">' + escapeHtml(t('veh.nextStops')) + '</h3>' +
+        (next.length
+          ? '<ol class="vc-stops">' + next.map(function (s, i) {
+              var when = s.arrival || s.departure;
+              var mins = Math.round((new Date(when).getTime() - Date.now()) / 60000);
+              return '<li' + (i === 0 ? ' class="is-next"' : '') + '>' +
+                '<span class="vc-stop-name" title="' + escapeHtml(s.stop.name) + '">' + escapeHtml(cleanStopName(s.stop.name)) + '</span>' +
+                '<span class="vc-stop-time">' + escapeHtml(clockTime(when)) +
+                  (mins > 0 && mins < 60 ? ' <em>' + escapeHtml(t('time.etaMin', { n: mins })) + '</em>' : '') + '</span>' +
+              '</li>';
+            }).join('') + '</ol>'
+          : '<p class="vc-note">' + escapeHtml(t('veh.lastStop')) + '</p>');
+    }
+
+    host.innerHTML = head + body;
+    host.hidden = false;
+    $('vc-close').addEventListener('click', closeVehicleCard);
   }
 
   function handlePosition(pos, recenter) {
@@ -2041,6 +2247,7 @@
     state.prefs.sheetExpanded = on;
     savePrefs();
     $('sheet').dataset.state = on ? 'expanded' : 'collapsed';
+    if (on && typeof closeVehicleCard === 'function') closeVehicleCard();
     $('sheet-handle').setAttribute('aria-expanded', on ? 'true' : 'false');
     $('sheet-handle').setAttribute('aria-label', on ? t('sheet.collapse') : t('sheet.expand'));
   }
@@ -2106,8 +2313,11 @@
 
     // Tapping the map while the sheet is open gets it out of the way, same
     // as Apple/Google Maps — but a drag is a pan, not a dismissal.
-    map.on('click', function () {
+    map.on('click', function (latlng) {
       if (state.sheetExpanded) setSheetExpanded(false);
+      var hit = vehicleAt(latlng);
+      if (hit) { if (hit.id !== state.vcard.id) openVehicleCard(hit); }
+      else closeVehicleCard();
     });
 
     document.querySelectorAll('.tab').forEach(function (tab) {
@@ -2345,6 +2555,7 @@
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
       if (e.key === 'l') locateOnce();
       if (e.key === 'f') toggleFullscreen();
+      if (e.key === 'Escape' && state.vcard.id) closeVehicleCard();
       if (e.key === 'Escape' && state.immersive) setImmersive(false);
       if (e.key === '+' || e.key === '=') map.zoomBy(1);
       if (e.key === '-') map.zoomBy(-1);
@@ -2407,6 +2618,7 @@
     // handles on its own — anything a render* function or a toggle button
     // set imperatively needs a second pass in the new language.
     I18N.onChange(function () {
+      if (state.vcard.id) renderVehicleCard();
       applyToggleLabels();
       applyPlacesEmptyText();
       renderLive();

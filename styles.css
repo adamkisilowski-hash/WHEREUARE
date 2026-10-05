@@ -1998,3 +1998,163 @@ body.is-immersive .sheet { display: none; }
   font-weight: 600;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 }
+
+/* ------------------------------------------------- vehicle details card */
+.veh-card {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--sheet-collapsed-h) + 12px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 8;
+  width: calc(100% - 24px);
+  max-width: 396px;
+  max-height: 58vh;
+  overflow-y: auto;
+  padding: 12px 14px 12px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(28px) saturate(1.7);
+  backdrop-filter: blur(28px) saturate(1.7);
+  border: 1px solid var(--glass-border);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  animation: vc-in 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.veh-card[hidden] { display: none; }
+
+@keyframes vc-in {
+  from { opacity: 0; transform: translate(-50%, 10px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) { .veh-card { animation: none; } }
+
+.vc-head { display: flex; align-items: center; gap: 10px; }
+
+.vc-badge {
+  flex: none;
+  min-width: 34px;
+  height: 28px;
+  padding: 0 7px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.vc-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 14px; }
+.vc-title strong { font-weight: 700; }
+.vc-title span { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.vc-close {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.vc-close:hover { background: var(--accent-soft); color: var(--text); }
+
+.vc-route {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.vc-end { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.vc-arrow { align-self: center; color: var(--text-dim); font-size: 16px; }
+.vc-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); }
+.vc-place { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vc-time { font-size: 12px; color: var(--text-dim); }
+
+.vc-delay {
+  display: inline-block;
+  margin-left: 2px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.vc-delay.is-late { background: var(--text); border-color: var(--text); color: var(--bg); }
+
+.vc-sub {
+  margin: 12px 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+
+.vc-stops { list-style: none; margin: 0; padding: 0; position: relative; }
+
+.vc-stops li {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0 6px 20px;
+  font-size: 13px;
+}
+
+/* A small line-and-dots timeline down the left edge. */
+.vc-stops li::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin-top: -4px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--text-dim);
+  box-sizing: border-box;
+  z-index: 1;
+}
+
+.vc-stops li::after {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--border);
+}
+
+.vc-stops li:first-child::after { top: 50%; }
+.vc-stops li:last-child::after { bottom: 50%; }
+.vc-stops li:only-child::after { display: none; }
+
+.vc-stops li.is-next { font-weight: 600; }
+.vc-stops li.is-next::before { background: var(--text); border-color: var(--text); }
+
+.vc-stop-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vc-stop-time { flex: none; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.vc-stop-time em { font-style: normal; margin-left: 4px; font-size: 11px; }
+
+.vc-note { margin: 10px 0 2px; font-size: 13px; color: var(--text-dim); }
+
+/* The tapped vehicle gets a ring so you can see which one the card is about. */
+.mm-marker-veh.is-selected {
+  z-index: 3;
+  box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--text), 0 3px 10px rgba(0, 0, 0, 0.4);
+}
