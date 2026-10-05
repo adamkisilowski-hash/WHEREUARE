@@ -206,7 +206,10 @@
 
   MiniMap.prototype._emit = function (event, payload) {
     var fns = this.listeners[event] || [];
-    for (var i = 0; i < fns.length; i++) fns[i](payload);
+    for (var i = 0; i < fns.length; i++) {
+      // One broken listener must never stop the others, or the animation loop.
+      try { fns[i](payload); } catch (err) { if (global.console) console.error(err); }
+    }
   };
 
   /* Instant by default. With opts.animate the map glides to the new centre
@@ -279,6 +282,20 @@
     var self = this;
     var last = now();
     var step = function () {
+      var active = false;
+      try {
+        active = tick();
+      } catch (err) {
+        // Drop whatever animation blew up; keep the map alive.
+        if (global.console) console.error(err);
+        self._zoomAnim = null; self._panAnim = null; self._inertia = null;
+        if (!isFinite(self.center.lat) || !isFinite(self.center.lng) || !isFinite(self.zoom)) {
+          self.center = { lat: 48.2082, lng: 16.3738 }; self.zoom = 14;
+        }
+      }
+      self._raf = active ? global.requestAnimationFrame(step) : 0;
+    };
+    var tick = function () {
       var t = now();
       var dt = Math.min(64, t - last);
       last = t;
@@ -311,10 +328,11 @@
       }
 
       if (self._stepMarkers(t)) active = true;
+      if (za || inr) self._flagBusy();
 
       self.render();
       if (za || pa || inr) self._emit('move', self.getView());
-      self._raf = active ? global.requestAnimationFrame(step) : 0;
+      return active;
     };
     this._raf = global.requestAnimationFrame(step);
   };
@@ -340,8 +358,21 @@
       };
     }
 
+    function resetPointers() {
+      pointers = Object.create(null);
+      pinch = null;
+      dragging = false;
+      last = null;
+      samples = [];
+      self.el.classList.remove('is-dragging');
+    }
+
     this.el.addEventListener('pointerdown', function (e) {
-      pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+      // A primary pointer going down means no other finger is on the screen.
+      // If the browser lost a touch (system gesture, edge swipe, popup), a
+      // stale entry would turn the next drag into a phantom pinch.
+      if (e.isPrimary) resetPointers();
+      pointers[e.pointerId] = { x: e.clientX, y: e.clientY, t: now() };
       // Touching the map stops any glide or momentum dead, like a real map.
       self._inertia = null;
       self._panAnim = null;
@@ -350,7 +381,7 @@
         moved = 0;
         last = { x: e.clientX, y: e.clientY };
         samples = [{ x: e.clientX, y: e.clientY, t: now() }];
-        self.el.setPointerCapture(e.pointerId);
+        try { self.el.setPointerCapture(e.pointerId); } catch (err) { /* pointer already gone */ }
         self.el.classList.add('is-dragging');
       } else if (pointerCount() === 2) {
         dragging = false;
@@ -361,7 +392,9 @@
 
     this.el.addEventListener('pointermove', function (e) {
       if (!pointers[e.pointerId]) return;
-      pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+      // A mouse released outside the window never reports it.
+      if (e.pointerType === 'mouse' && e.buttons === 0) { release(e); return; }
+      pointers[e.pointerId] = { x: e.clientX, y: e.clientY, t: now() };
 
       if (pointerCount() === 2 && pinch) {
         // Continuous pinch: zoom follows the fingers exactly, and moving
@@ -374,6 +407,7 @@
         }
         pinch.mid = mid;
         self._scheduleRender(true);
+        self._flagBusy();
         return;
       }
 
@@ -387,6 +421,7 @@
       while (samples.length > 2 && t - samples[0].t > 100) samples.shift();
       self._panRaw(-dx, -dy);
       self._scheduleRender(true);
+      self._flagBusy();
     });
 
     function release(e) {
@@ -408,7 +443,7 @@
         var t = now();
         if (dragging && moved < 5) {
           var pt = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-          self._emit('click', self.pointToLatLng(pt.x, pt.y));
+          self._emit('click', self.pointToLatLng(pt.x, pt.y));   // _emit never throws
           if (lastTap && t - lastTap.t < 320 && Math.hypot(pt.x - lastTap.x, pt.y - lastTap.y) < 30) {
             self.zoomBy(1, pt, 320);
             lastTap = null;
@@ -439,7 +474,32 @@
 
     this.el.addEventListener('pointerup', release);
     this.el.addEventListener('pointercancel', release);
+    this.el.addEventListener('lostpointercapture', function (e) {
+      if (pointers[e.pointerId]) release(e);
+    });
+    // Anything that interrupts touch input: forget all fingers.
+    global.addEventListener('blur', resetPointers);
+    global.addEventListener('pagehide', resetPointers);
+    document.addEventListener('visibilitychange', function () { if (document.hidden) resetPointers(); });
+    global.addEventListener('touchend', function (ev) {
+      if (ev.touches && ev.touches.length === 0 && pointerCount() > 0) {
+        // All fingers are up but we still count one: a pointerup was lost.
+        setTimeout(function () { if (pointerCount() > 0) resetPointers(); }, 80);
+      }
+    }, { passive: true });
     this.el.addEventListener('dblclick', function (e) { e.preventDefault(); });
+  };
+
+  /* While the map is being moved, the page gets a `map-busy` class so the
+   * stylesheet can drop expensive blur layers until things settle. */
+  MiniMap.prototype._flagBusy = function () {
+    var self = this;
+    if (!this._busy) { this._busy = true; document.documentElement.classList.add('map-busy'); }
+    clearTimeout(this._busyTimer);
+    this._busyTimer = setTimeout(function () {
+      self._busy = false;
+      document.documentElement.classList.remove('map-busy');
+    }, 180);
   };
 
   MiniMap.prototype._pinchDistance = function (pointers) {

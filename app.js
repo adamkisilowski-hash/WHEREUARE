@@ -1259,80 +1259,184 @@
     return b;
   }
 
-  function fetchVehicles() {
-    if (!state.prefs.trainMode || state.veh.busy) return;
+  /* Loading by map cells. Instead of one request for whatever is on screen
+   * (slow, and thrown away on every pan), the world is cut into a grid whose
+   * cell size follows the zoom level. Each cell is its own small, fast
+   * request, cells load in parallel, and every answer is kept for a while.
+   * Panning only has to ask for the few cells that are new, and anything
+   * already seen is on screen instantly while it refreshes in the background. */
+  var LIVE_CELL_TTL = 18000;     // ms before a cell is asked for again
+  var LIVE_KEEP = 150000;        // ms an old answer may still be shown
+  var LIVE_MAX_CELLS = 12;
+  var LIVE_MAX_INFLIGHT = 6;
+  state.veh.cells = {};
+  state.veh.plan = null;
+  state.veh.inflight = 0;
+  state.veh.moveFirst = 0;
+
+  function cellPlan() {
+    var b = mapBounds();
+    var span = Math.max(b.east - b.west, b.north - b.south, 1e-4);
+    var level = clampNum(Math.ceil(Math.log(360 / span) / Math.LN2), 6, 16);
+    var cell, i0, i1, j0, j1, pad;
+    for (; level >= 6; level--) {
+      cell = 360 / Math.pow(2, level);
+      pad = cell * 0.2;                      // a little look-ahead past the edges
+      i0 = Math.floor((b.south - pad) / cell); i1 = Math.floor((b.north + pad) / cell);
+      j0 = Math.floor((b.west - pad) / cell);  j1 = Math.floor((b.east + pad) / cell);
+      if ((i1 - i0 + 1) * (j1 - j0 + 1) <= LIVE_MAX_CELLS) break;
+    }
+    var cells = [];
+    var c = map.getView();
+    for (var i = i0; i <= i1; i++) {
+      for (var j = j0; j <= j1; j++) {
+        var cell0 = {
+          key: level + ':' + i + ':' + j,
+          south: i * cell, north: (i + 1) * cell, west: j * cell, east: (j + 1) * cell
+        };
+        cell0.d = Math.hypot((cell0.south + cell0.north) / 2 - c.lat, (cell0.west + cell0.east) / 2 - c.lng);
+        cells.push(cell0);
+      }
+    }
+    cells.sort(function (p, q) { return p.d - q.d; });   // nearest the centre first
+    return { level: level, cells: cells };
+  }
+
+  function clampNum(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+  function refreshVehicles(force) {
+    if (!state.prefs.trainMode) return;
     if (document.hidden) return;
     if (map.getView().zoom < LIVE_MIN_ZOOM) {
       state.veh.tooFar = true;
       state.veh.vehicles = [];
+      state.veh.plan = null;
       map.clearMarkers('veh:');
       vehOnMap = {};
       renderVehicles();
       return;
     }
     state.veh.tooFar = false;
-    var b = mapBounds();
-    var url = LIVE_URL + '?north=' + b.north.toFixed(5) + '&south=' + b.south.toFixed(5) +
-      '&west=' + b.west.toFixed(5) + '&east=' + b.east.toFixed(5) +
-      '&results=1000&duration=' + LIVE_HORIZON + '&frames=' + LIVE_FRAMES +
-      '&polylines=true&_=' + Date.now();
-    state.veh.busy = true;
+    var plan = state.veh.plan = cellPlan();
+    var now = Date.now();
+    var queue = plan.cells.filter(function (c) {
+      var e = state.veh.cells[c.key];
+      if (e && e.busy) return false;
+      return force || !e || now - e.at >= LIVE_CELL_TTL;
+    });
+    rebuildVehicles();                       // cached cells show up right away
+    var room = LIVE_MAX_INFLIGHT - state.veh.inflight;
+    for (var i = 0; i < queue.length && i < room; i++) fetchCell(queue[i]);
+  }
+
+  function fetchVehicles() { refreshVehicles(false); }
+
+  function fetchCell(c) {
+    var e = state.veh.cells[c.key] || (state.veh.cells[c.key] = { at: 0, list: [], busy: false, failed: false });
+    e.busy = true;
+    state.veh.inflight++;
+    var url = LIVE_URL + '?north=' + c.north.toFixed(5) + '&south=' + c.south.toFixed(5) +
+      '&west=' + c.west.toFixed(5) + '&east=' + c.east.toFixed(5) +
+      '&results=600&duration=' + LIVE_HORIZON + '&frames=' + LIVE_FRAMES +
+      '&polylines=true&_=' + Date.now() + Math.floor(Math.random() * 1000);
     // The server works out "where is it now" when the request arrives, so
     // the moment we send it is the path's t=0 (give or take the latency).
     var sentAt = Date.now();
-    fetch(url, { cache: 'no-store' })
+    var ctl = window.AbortController ? new AbortController() : null;
+    var timeout = setTimeout(function () { if (ctl) ctl.abort(); }, 15000);
+    fetch(url, { cache: 'no-store', signal: ctl ? ctl.signal : undefined })
       .then(function (r) {
         if (!r.ok) throw new Error('radar failed: ' + r.status);
         return r.json();
       })
       .then(function (data) {
-        var list = (data && data.movements) || [];
-        var seen = {};
-        var previous = {};
-        state.veh.vehicles.forEach(function (v) { previous[v.id] = v; });
-        var now = Date.now();
-        state.veh.vehicles = list.map(function (m) {
-          var kind = liveKind(m.line);
-          if (!kind || !m.location || m.location.latitude == null) return null;
-          if (seen[m.tripId]) return null;
-          seen[m.tripId] = true;
-          var v = {
-            id: m.tripId,
-            kind: kind,
-            name: (m.line && m.line.name) || '',
-            short: liveShortName(m.line, kind),
-            direction: m.direction || '',
-            lat: m.location.latitude,
-            lng: m.location.longitude,
-            delay: liveDelay(m),
-            path: livePath(m),
-            t0: sentAt,
-            step: LIVE_HORIZON * 1000 / LIVE_FRAMES,
-            blend: null
-          };
-          // If this vehicle was already on screen, don't let it jump to the
-          // fresh path's "now" — start from where it is and ease over.
-          var old = previous[v.id];
-          if (old) {
-            var fresh = pathPosition(v, now);
-            v.blend = { dlat: old.lat - fresh.lat, dlng: old.lng - fresh.lng, t0: now };
-            v.lat = old.lat;
-            v.lng = old.lng;
-          }
-          return v;
-        }).filter(Boolean);
-        state.veh.failed = false;
-        state.veh.at = Date.now();
-        state.veh.busy = false;
-        drawVehicleMarkers();
-        renderVehicles();
-        tickVehicles();
+        e.list = parseMovements((data && data.movements) || [], sentAt);
+        e.at = Date.now();
+        e.failed = false;
       })
       .catch(function () {
-        state.veh.failed = true;
-        state.veh.busy = false;
-        renderVehicles();
+        e.failed = true;
+        e.at = Date.now() - LIVE_CELL_TTL + 4000;   // try again in a few seconds
+      })
+      .then(function () {
+        clearTimeout(timeout);
+        e.busy = false;
+        state.veh.inflight--;
+        state.veh.at = Date.now();
+        rebuildVehicles();
+        // Pick up any cells that had to wait for a free slot.
+        if (state.veh.plan && state.veh.plan.cells.some(function (p) {
+          var q = state.veh.cells[p.key]; return !q || (!q.busy && !q.at);
+        })) refreshVehicles(false);
       });
+  }
+
+  function parseMovements(list, sentAt) {
+    var seen = {};
+    return list.map(function (m) {
+      var kind = liveKind(m.line);
+      if (!kind || !m.location || m.location.latitude == null) return null;
+      if (seen[m.tripId]) return null;
+      seen[m.tripId] = true;
+      return {
+        id: m.tripId,
+        kind: kind,
+        name: (m.line && m.line.name) || '',
+        short: liveShortName(m.line, kind),
+        direction: m.direction || '',
+        lat: m.location.latitude,
+        lng: m.location.longitude,
+        delay: liveDelay(m),
+        path: livePath(m),
+        t0: sentAt,
+        step: LIVE_HORIZON * 1000 / LIVE_FRAMES,
+        blend: null,
+        adopted: false
+      };
+    }).filter(Boolean);
+  }
+
+  /* Merges every wanted cell into the vehicle set that is drawn. A vehicle
+   * that sits in two cells takes the fresher answer. When a fresh path
+   * replaces one already on screen, the marker eases over instead of jumping. */
+  function rebuildVehicles() {
+    var plan = state.veh.plan;
+    if (!plan) return;
+    var now = Date.now();
+    var entries = [];
+    var pending = false, failedAll = true;
+    plan.cells.forEach(function (c) {
+      var e = state.veh.cells[c.key];
+      if (!e) { pending = true; return; }
+      if (e.busy) pending = true;
+      if (!e.failed) failedAll = false;
+      if (e.at && now - e.at < LIVE_KEEP && e.list) entries.push(e);
+    });
+    entries.sort(function (p, q) { return p.at - q.at; });
+    var byId = {};
+    entries.forEach(function (e) { e.list.forEach(function (v) { byId[v.id] = v; }); });
+
+    var previous = {};
+    state.veh.vehicles.forEach(function (v) { previous[v.id] = v; });
+    var out = [];
+    Object.keys(byId).forEach(function (id) {
+      var v = byId[id];
+      var old = previous[id];
+      if (old && old !== v && !v.adopted) {
+        var fresh = pathPosition(v, now);
+        v.blend = { dlat: old.lat - fresh.lat, dlng: old.lng - fresh.lng, t0: now };
+        v.lat = old.lat;
+        v.lng = old.lng;
+      }
+      v.adopted = true;
+      out.push(v);
+    });
+    state.veh.vehicles = out;
+    state.veh.failed = failedAll && !entries.length && !pending;
+    if (entries.length || !pending) state.veh.at = state.veh.at || now;
+    drawVehicleMarkers();
+    renderVehicles();
+    tickVehicles();
   }
 
   // The predicted path as [{lat, lng}], one point per LIVE_HORIZON/LIVE_FRAMES
@@ -1444,8 +1548,8 @@
 
   function startVehicles() {
     stopVehicles();
-    fetchVehicles();
-    state.veh.timer = setInterval(fetchVehicles, LIVE_INTERVAL);
+    refreshVehicles(true);
+    state.veh.timer = setInterval(function () { refreshVehicles(false); }, LIVE_INTERVAL);
   }
 
   function stopVehicles() {
@@ -1457,17 +1561,26 @@
     state.veh.moveTimer = null;
     state.veh.raf = 0;
     state.veh.vehicles = [];
+    state.veh.cells = {};
+    state.veh.plan = null;
     state.veh.at = 0;
     if (map) map.clearMarkers('veh:');
     vehOnMap = {};
     renderVehicles();
   }
 
-  // Panning or zooming fetches the new area once the map settles.
+  // Panning or zooming asks for the cells that came into view: shortly after
+  // the map pauses, and at the latest every 350 ms while it keeps moving.
   function scheduleVehicles() {
     if (!state.prefs.trainMode) return;
-    if (state.veh.moveTimer) clearTimeout(state.veh.moveTimer);
-    state.veh.moveTimer = setTimeout(fetchVehicles, 1200);
+    var v = state.veh, t = Date.now();
+    if (!v.moveFirst) v.moveFirst = t;
+    if (v.moveTimer) clearTimeout(v.moveTimer);
+    v.moveTimer = setTimeout(function () {
+      v.moveFirst = 0;
+      v.moveTimer = null;
+      refreshVehicles(false);
+    }, t - v.moveFirst > 350 ? 0 : 120);
   }
 
   /* ------------------------------------------------------ vehicle details */

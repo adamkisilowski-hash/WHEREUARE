@@ -695,3 +695,170 @@ input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px 
 .auth-verify h2 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.02em; text-align: center; }
 .auth-verify-text { margin: 0 0 6px; font-size: 14px; line-height: 1.5; color: var(--text-dim); text-align: center; }
 .auth-verify .link-btn { align-self: center; margin-top: 4px; }
+
+/* ======================================================= smooth map moving
+ * While the map is being dragged, pinched or coasting, the page carries the
+ * class `map-busy`. Live blur over a moving map is the single most expensive
+ * thing a phone GPU does, so for those moments the glass turns into a calm,
+ * slightly denser tint and blurs again the instant the map settles. */
+.map-busy .sheet,
+.map-busy .veh-card,
+.map-busy .hud,
+.map-busy .banner,
+.map-busy .toast,
+.map-busy .map-pod,
+.map-busy .mc-btn,
+.map-busy .account-menu,
+.map-busy .seg-pill {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.map-busy .sheet,
+.map-busy .veh-card,
+.map-busy .hud,
+.map-busy .banner,
+.map-busy .toast,
+.map-busy .map-pod { background-color: var(--glass-strong); }
+
+/* One layer for the sheet is enough; `will-change: max-height` made the
+   browser keep a huge texture around for nothing. */
+.sheet { will-change: auto; }
+.minimap { touch-action: none; overscroll-behavior: contain; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.mm-tile { will-change: auto; }
+
+/* ============================================================== motion
+ * Everything below is about arrival and feedback: things ease in, answer a
+ * press, and breathe a little when they are live. */
+
+:root {
+  --spring: cubic-bezier(0.22, 1.25, 0.36, 1);
+  --ease-out: cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+
+/* The sheet rises into place when the app opens. */
+@keyframes sheet-rise {
+  from { opacity: 0; translate: 0 36px; scale: 0.96; }
+  to { opacity: 1; translate: 0 0; scale: 1; }
+}
+.sheet { animation: sheet-rise 0.7s var(--spring) 0.15s both; }
+
+/* Map controls pop in one after the other. */
+@keyframes pop-in {
+  from { opacity: 0; scale: 0.6; }
+  to { opacity: 1; scale: 1; }
+}
+.map-pod { animation: pop-in 0.5s var(--spring) 0.35s both; }
+.map-tools .mc-btn, .map-pod .mc-btn { transition: background 0.2s, transform 0.2s var(--spring); }
+.mc-btn:active { transform: scale(0.88); }
+
+/* Panel content arrives in a short cascade rather than all at once. */
+@keyframes rise-in {
+  from { opacity: 0; translate: 0 12px; }
+  to { opacity: 1; translate: 0 0; }
+}
+.tab-panel.is-active > * { animation: rise-in 0.5s var(--ease-out) both; }
+.tab-panel.is-active > *:nth-child(1) { animation-delay: 0.02s; }
+.tab-panel.is-active > *:nth-child(2) { animation-delay: 0.06s; }
+.tab-panel.is-active > *:nth-child(3) { animation-delay: 0.10s; }
+.tab-panel.is-active > *:nth-child(4) { animation-delay: 0.14s; }
+.tab-panel.is-active > *:nth-child(5) { animation-delay: 0.18s; }
+.tab-panel.is-active > *:nth-child(6) { animation-delay: 0.22s; }
+.tab-panel.is-active > *:nth-child(n+7) { animation-delay: 0.26s; }
+
+/* Stat tiles lift slightly when touched. */
+.stat, .coords, .place, .friend, .veh-item {
+  transition: transform 0.25s var(--spring), background 0.25s, box-shadow 0.25s;
+}
+.stat:active { transform: scale(0.97); }
+@media (hover: hover) {
+  .stat:hover { transform: translateY(-2px); }
+}
+
+/* Every real button answers a press with a springy squeeze. */
+.btn, .btn-primary, .ghost-btn, .live-btn, .account-menu-item, .swatch, .avatar-btn, .seg .tab {
+  transition: transform 0.28s var(--spring), background-color 0.2s, color 0.2s, opacity 0.2s;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn:active, .btn-primary:active, .live-btn:active, .avatar-btn:active { transform: scale(0.95); }
+.swatch:active { transform: scale(0.88); }
+
+/* Sheet grip wiggles to say "pull me" until it is used once. */
+@keyframes grip-nudge {
+  0%, 100% { translate: 0 0; }
+  50% { translate: 0 -2px; }
+}
+.sheet[data-state="collapsed"] .sheet-grip { animation: grip-nudge 2.6s ease-in-out 1.2s 3; }
+
+/* Live indicators breathe. */
+@keyframes breathe {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); }
+  70%, 100% { box-shadow: 0 0 0 9px transparent; }
+}
+.sheet-status-dot.is-live, .live-dot { animation: breathe 2s ease-out infinite; }
+
+/* Vehicles pop onto the map and the selected one sends out a soft ring. */
+@keyframes veh-pop {
+  from { opacity: 0; scale: 0.2; }
+  60% { opacity: 1; scale: 1.18; }
+  to { opacity: 1; scale: 1; }
+}
+.mm-marker-veh { animation: veh-pop 0.45s var(--spring) both; transition: box-shadow 0.25s; }
+@keyframes veh-ring {
+  0% { box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--text), 0 0 0 5px color-mix(in srgb, var(--accent) 50%, transparent); }
+  100% { box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--text), 0 0 0 18px transparent; }
+}
+.mm-marker-veh.is-selected { animation: veh-pop 0.45s var(--spring) both, veh-ring 1.8s ease-out 0.4s infinite; }
+
+/* The vehicle card springs up from the bottom edge. */
+@keyframes card-up {
+  from { opacity: 0; translate: 0 26px; scale: 0.94; }
+  to { opacity: 1; translate: 0 0; scale: 1; }
+}
+.veh-card { animation: card-up 0.5s var(--spring) both; }
+.vc-stop, .veh-item { animation: rise-in 0.4s var(--ease-out) both; }
+.vc-stop:nth-child(2) { animation-delay: 0.05s; }
+.vc-stop:nth-child(3) { animation-delay: 0.10s; }
+.vc-stop:nth-child(4) { animation-delay: 0.15s; }
+.vc-stop:nth-child(5) { animation-delay: 0.20s; }
+.vc-stop:nth-child(6) { animation-delay: 0.25s; }
+
+/* Toasts and banners slide in from the top. */
+@keyframes drop-in {
+  from { opacity: 0; translate: 0 -16px; scale: 0.96; }
+  to { opacity: 1; translate: 0 0; scale: 1; }
+}
+.toast, .banner { animation: drop-in 0.45s var(--spring) both; }
+
+/* The login card and its verification panel. */
+@keyframes auth-in {
+  from { opacity: 0; translate: 0 22px; scale: 0.96; }
+  to { opacity: 1; translate: 0 0; scale: 1; }
+}
+.auth-card { animation: auth-in 0.7s var(--spring) both; }
+
+/* Account menu unfolds from its corner. */
+@keyframes menu-in {
+  from { opacity: 0; scale: 0.9; translate: 0 -6px; }
+  to { opacity: 1; scale: 1; translate: 0 0; }
+}
+.account-menu:not([hidden]) { animation: menu-in 0.3s var(--spring) both; transform-origin: top right; }
+
+/* Switches and the accent preview react with a little bounce. */
+.switch-knob, .switch::after, .ios-switch::after { transition-timing-function: var(--spring); }
+
+/* ============================================================ finer look */
+
+.sheet-body { scrollbar-width: none; }
+.sheet-body::-webkit-scrollbar { display: none; }
+.panel-head h1 { font-weight: 700; letter-spacing: -0.03em; }
+.stat { border-radius: 18px; }
+.stat-value { font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.stat-label { text-transform: none; letter-spacing: 0; }
+.coord-value { font-variant-numeric: tabular-nums; }
+.seg-wrap { padding-bottom: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sheet, .map-pod, .veh-card, .toast, .banner, .auth-card, .account-menu,
+  .tab-panel.is-active > *, .vc-stop, .veh-item, .mm-marker-veh, .sheet-grip,
+  .sheet-status-dot.is-live, .live-dot { animation: none !important; }
+}
