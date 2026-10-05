@@ -570,6 +570,11 @@ body {
   inset: 0;
 }
 
+/* Tiles carry their own z-index (current zoom level over the one being
+   replaced), so each tile layer must be its own stacking context or those
+   tiles would paint over the markers and the track. */
+.mm-tiles { isolation: isolate; }
+
 .mm-markers, .mm-overlay, .mm-tiles-overlay { pointer-events: none; }
 
 /* The railway overlay is drawn for a white background, so on the dark
@@ -590,6 +595,9 @@ body {
   left: 0;
   width: 256px;
   height: 256px;
+  transform-origin: 0 0;
+  will-change: transform;
+  backface-visibility: hidden;
   opacity: 0;
   transition: opacity 0.2s ease;
 }
@@ -1872,3 +1880,8 @@ body.is-immersive .sheet { display: none; }
 }
 
 .veh-item .train-stop-name { flex: 1; }
+
+/* New vehicles fade in rather than popping onto the map. */
+.mm-marker-veh { animation: veh-in 0.4s ease-out; }
+@keyframes veh-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .mm-marker-veh { animation: none; } }

@@ -458,9 +458,11 @@
     // freeze rather than compound a guess on top of a guess.
     if (elapsed <= 0 || elapsed > 20) return;
     var dest = destinationPoint(c.latitude, c.longitude, c.heading, c.speed * elapsed);
-    map.setMarker('me', dest.lat, dest.lng, 'mm-marker-me', t('now.youAreHere'));
+    // 200 ms ticks with a 220 ms glide each: the dot moves continuously
+    // instead of hopping five times a second.
+    map.setMarker('me', dest.lat, dest.lng, 'mm-marker-me', t('now.youAreHere'), { glide: 220 });
     map.setAccuracy(dest.lat, dest.lng, c.accuracy);
-    if (state.followMe) map.setView(dest.lat, dest.lng, null);
+    if (state.followMe) map.setView(dest.lat, dest.lng, null, { animate: true, duration: 220 });
   }
 
   /* watchPosition only fires when the device decides you've moved far enough,
@@ -1252,6 +1254,7 @@
       state.veh.tooFar = true;
       state.veh.vehicles = [];
       map.clearMarkers('veh:');
+      vehOnMap = {};
       renderVehicles();
       return;
     }
@@ -1298,14 +1301,25 @@
       });
   }
 
+  /* Vehicles that were already on the map glide to their new position
+   * instead of being torn down and redrawn; new ones fade in, departed ones
+   * are removed. */
+  var VEH_GLIDE = 2500;
+  var vehOnMap = {};
   function drawVehicleMarkers() {
-    map.clearMarkers('veh:');
-    if (!state.prefs.trainMode) return;
+    if (!state.prefs.trainMode) { map.clearMarkers('veh:'); vehOnMap = {}; return; }
+    var next = {};
     state.veh.vehicles.forEach(function (v) {
+      var id = 'veh:' + v.id;
       var label = t('live.kind.' + v.kind) + ' ' + v.short + ' → ' + v.direction;
-      var el = map.setMarker('veh:' + v.id, v.lat, v.lng, 'mm-marker-veh mm-veh-' + v.kind, label);
-      el.textContent = v.short;
+      var el = map.setMarker(id, v.lat, v.lng, 'mm-marker-veh mm-veh-' + v.kind, label, { glide: VEH_GLIDE });
+      if (el.textContent !== v.short) el.textContent = v.short;
+      next[id] = true;
     });
+    Object.keys(vehOnMap).forEach(function (id) {
+      if (!next[id]) map.removeMarker(id);
+    });
+    vehOnMap = next;
   }
 
   function liveTypeLabel(kind) { return t('live.kind.' + kind); }
@@ -1351,6 +1365,7 @@
     state.veh.vehicles = [];
     state.veh.at = 0;
     if (map) map.clearMarkers('veh:');
+    vehOnMap = {};
     renderVehicles();
   }
 
@@ -1379,11 +1394,13 @@
     maybeFetchWeather(point.lat, point.lng);
     maybeQueryRailway(point.lat, point.lng);
 
-    map.setMarker('me', point.lat, point.lng, 'mm-marker-me', t('now.youAreHere'));
+    map.setMarker('me', point.lat, point.lng, 'mm-marker-me', t('now.youAreHere'), recenter ? null : { glide: 600 });
     map.setAccuracy(point.lat, point.lng, c.accuracy);
-    if (recenter || state.followMe) {
+    if (recenter) {
       // An explicit locate reframes the map; a passive watch update just slides.
-      map.setView(point.lat, point.lng, recenter ? zoomForAccuracy(c.accuracy) : null);
+      map.setView(point.lat, point.lng, zoomForAccuracy(c.accuracy));
+    } else if (state.followMe) {
+      map.setView(point.lat, point.lng, null, { animate: true, duration: 600 });
     }
 
     renderNow();
@@ -1732,10 +1749,17 @@
 
   /* ---------------------------------------------------------------- hash */
 
+  // Debounced: the map now emits a move every animation frame, and Safari
+  // throws if replaceState is called more than ~100 times in 10 seconds.
+  var hashTimer = null;
   function syncHash() {
-    var v = map.getView();
-    var next = '#' + v.lat.toFixed(5) + ',' + v.lng.toFixed(5) + ',' + v.zoom;
-    if (location.hash !== next) history.replaceState(null, '', next);
+    if (hashTimer) clearTimeout(hashTimer);
+    hashTimer = setTimeout(function () {
+      hashTimer = null;
+      var v = map.getView();
+      var next = '#' + v.lat.toFixed(5) + ',' + v.lng.toFixed(5) + ',' + Math.round(v.zoom);
+      if (location.hash !== next) history.replaceState(null, '', next);
+    }, 300);
   }
 
   function parseHash() {

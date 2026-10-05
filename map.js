@@ -1,7 +1,8 @@
 /* MiniMap — a small dependency-free slippy map over OpenStreetMap tiles.
  *
- * Covers what this app needs and nothing more: pan, integer zoom, markers,
- * an accuracy circle, and a track polyline. Web Mercator throughout, with
+ * Covers what this app needs and nothing more: pan with momentum, smooth
+ * fractional zoom (animated wheel/buttons, continuous pinch, double-tap),
+ * markers that can glide, an accuracy circle, and a track polyline. Web Mercator throughout, with
  * tiles at 256px so world size is 256 * 2^zoom pixels.
  */
 (function (global) {
@@ -18,6 +19,10 @@
   function clampLat(lat) { return clamp(lat, -85.05112878, 85.05112878); }
 
   function worldSize(zoom) { return TILE * Math.pow(2, zoom); }
+
+  function now() { return (global.performance && performance.now) ? performance.now() : Date.now(); }
+  function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
+  function easeInOut(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
 
   function project(lat, lng, zoom) {
     var size = worldSize(zoom);
@@ -104,6 +109,13 @@
     this.bearing = 0;
     this.rotationEnabled = false;
     this._pad = 0;
+
+    // Animation state, all driven by one requestAnimationFrame loop.
+    this._zoomAnim = null;    // { from, to, t0, dur, anchor }
+    this._panAnim = null;     // { from, to, t0, dur } — eased recentring
+    this._inertia = null;     // { vx, vy } in screen px per ms
+    this._raf = 0;
+    this._renderQueued = false;
 
     this._bindPointer();
     this._bindWheel();
@@ -197,9 +209,28 @@
     for (var i = 0; i < fns.length; i++) fns[i](payload);
   };
 
-  MiniMap.prototype.setView = function (lat, lng, zoom) {
-    this.center = { lat: clampLat(lat), lng: lng };
-    if (zoom != null) this.zoom = clamp(Math.round(zoom), MIN_ZOOM, MAX_ZOOM);
+  /* Instant by default. With opts.animate the map glides to the new centre
+   * (used for follow-me updates) unless the jump is too far to be worth
+   * animating, in which case it just goes there. */
+  MiniMap.prototype.setView = function (lat, lng, zoom, opts) {
+    var target = { lat: clampLat(lat), lng: lng };
+    if (zoom != null) {
+      this._zoomAnim = null;
+      this.zoom = clamp(zoom, MIN_ZOOM, MAX_ZOOM);
+    }
+    this._inertia = null;
+    if (opts && opts.animate && zoom == null) {
+      var a = project(this.center.lat, this.center.lng, this.zoom);
+      var b = project(target.lat, target.lng, this.zoom);
+      var s = this.size();
+      if (Math.hypot(a.x - b.x, a.y - b.y) < Math.max(s.w, s.h) * 2) {
+        this._panAnim = { from: this.center, to: target, t0: now(), dur: opts.duration || 600 };
+        this._loop();
+        return this;
+      }
+    }
+    this._panAnim = null;
+    this.center = target;
     this.render();
     this._emit('move', this.getView());
     return this;
@@ -209,24 +240,83 @@
     return { lat: this.center.lat, lng: this.center.lng, zoom: this.zoom };
   };
 
-  MiniMap.prototype.zoomBy = function (delta, anchor) {
-    var next = clamp(this.zoom + delta, MIN_ZOOM, MAX_ZOOM);
-    if (next === this.zoom) return this;
-    if (anchor) {
-      // Keep the geographic point under `anchor` pinned to the same pixel.
-      var before = this.pointToLatLng(anchor.x, anchor.y);
-      this.zoom = next;
-      var after = this.pointToLatLng(anchor.x, anchor.y);
-      this.center = {
-        lat: clampLat(this.center.lat + (before.lat - after.lat)),
-        lng: this.center.lng + (before.lng - after.lng)
-      };
-    } else {
-      this.zoom = next;
-    }
-    this.render();
-    this._emit('move', this.getView());
+  // Set a (fractional) zoom keeping the geographic point under `anchor`
+  // pinned to the same screen pixel. No render — callers batch that.
+  MiniMap.prototype._zoomAround = function (z, anchor) {
+    z = clamp(z, MIN_ZOOM, MAX_ZOOM);
+    if (!anchor) { this.zoom = z; return; }
+    var before = this.pointToLatLng(anchor.x, anchor.y);
+    this.zoom = z;
+    var after = this.pointToLatLng(anchor.x, anchor.y);
+    this.center = {
+      lat: clampLat(this.center.lat + (before.lat - after.lat)),
+      lng: this.center.lng + (before.lng - after.lng)
+    };
+  };
+
+  /* Animated zoom. Repeated calls while one is running (wheel ticks, fast
+   * button taps) extend the target instead of queueing, so it never
+   * stutters. Ends on whatever fraction it lands on — tiles scale to fit. */
+  MiniMap.prototype.zoomBy = function (delta, anchor, duration) {
+    var base = this._zoomAnim ? this._zoomAnim.to : this.zoom;
+    var to = clamp(base + delta, MIN_ZOOM, MAX_ZOOM);
+    if (Math.abs(to - this.zoom) < 1e-4 && !this._zoomAnim) return this;
+    // Whole-step zooms (buttons, keys, double-tap) land on whole levels so
+    // tiles end up pin-sharp.
+    if (Math.abs(delta) >= 1) to = clamp(Math.round(to), MIN_ZOOM, MAX_ZOOM);
+    this._inertia = null;
+    this._zoomAnim = {
+      from: this.zoom, to: to, t0: now(),
+      dur: duration != null ? duration : 300,
+      anchor: anchor || null
+    };
+    this._loop();
     return this;
+  };
+
+  MiniMap.prototype._loop = function () {
+    if (this._raf) return;
+    var self = this;
+    var last = now();
+    var step = function () {
+      var t = now();
+      var dt = Math.min(64, t - last);
+      last = t;
+      var active = false;
+
+      var za = self._zoomAnim;
+      if (za) {
+        var k = Math.min(1, (t - za.t0) / za.dur);
+        self._zoomAround(za.from + (za.to - za.from) * easeOut(k), za.anchor);
+        if (k >= 1) self._zoomAnim = null; else active = true;
+      }
+
+      var pa = self._panAnim;
+      if (pa) {
+        var q = Math.min(1, (t - pa.t0) / pa.dur);
+        var e = easeInOut(q);
+        self.center = {
+          lat: pa.from.lat + (pa.to.lat - pa.from.lat) * e,
+          lng: pa.from.lng + (pa.to.lng - pa.from.lng) * e
+        };
+        if (q >= 1) self._panAnim = null; else active = true;
+      }
+
+      var inr = self._inertia;
+      if (inr) {
+        self._panRaw(-inr.vx * dt, -inr.vy * dt);
+        var decay = Math.exp(-dt / 320);
+        inr.vx *= decay; inr.vy *= decay;
+        if (Math.hypot(inr.vx, inr.vy) < 0.02) self._inertia = null; else active = true;
+      }
+
+      if (self._stepMarkers(t)) active = true;
+
+      self.render();
+      if (za || pa || inr) self._emit('move', self.getView());
+      self._raf = active ? global.requestAnimationFrame(step) : 0;
+    };
+    this._raf = global.requestAnimationFrame(step);
   };
 
   MiniMap.prototype._bindPointer = function () {
@@ -234,22 +324,38 @@
     var dragging = false;
     var moved = 0;
     var last = null;
+    var samples = [];          // recent {x, y, t} for the release velocity
     var pointers = Object.create(null);
-    var pinchStart = null;
+    var pinch = null;          // { dist, zoom, mid }
+    var lastTap = null;        // for double-tap zoom
 
     function pointerCount() { return Object.keys(pointers).length; }
 
+    function midpoint() {
+      var rect = self.el.getBoundingClientRect();
+      var ids = Object.keys(pointers);
+      return {
+        x: (pointers[ids[0]].x + pointers[ids[1]].x) / 2 - rect.left,
+        y: (pointers[ids[0]].y + pointers[ids[1]].y) / 2 - rect.top
+      };
+    }
+
     this.el.addEventListener('pointerdown', function (e) {
       pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+      // Touching the map stops any glide or momentum dead, like a real map.
+      self._inertia = null;
+      self._panAnim = null;
       if (pointerCount() === 1) {
         dragging = true;
         moved = 0;
         last = { x: e.clientX, y: e.clientY };
+        samples = [{ x: e.clientX, y: e.clientY, t: now() }];
         self.el.setPointerCapture(e.pointerId);
         self.el.classList.add('is-dragging');
       } else if (pointerCount() === 2) {
         dragging = false;
-        pinchStart = self._pinchDistance(pointers);
+        self._zoomAnim = null;
+        pinch = { dist: self._pinchDistance(pointers), zoom: self.zoom, mid: midpoint() };
       }
     });
 
@@ -257,19 +363,17 @@
       if (!pointers[e.pointerId]) return;
       pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
 
-      if (pointerCount() === 2 && pinchStart) {
+      if (pointerCount() === 2 && pinch) {
+        // Continuous pinch: zoom follows the fingers exactly, and moving
+        // both fingers together pans at the same time.
         var dist = self._pinchDistance(pointers);
-        var ratio = dist / pinchStart;
-        if (ratio > 1.8 || ratio < 0.55) {
-          var rect = self.el.getBoundingClientRect();
-          var ids = Object.keys(pointers);
-          var mid = {
-            x: (pointers[ids[0]].x + pointers[ids[1]].x) / 2 - rect.left,
-            y: (pointers[ids[0]].y + pointers[ids[1]].y) / 2 - rect.top
-          };
-          self.zoomBy(ratio > 1 ? 1 : -1, mid);
-          pinchStart = dist;
+        var mid = midpoint();
+        if (pinch.dist > 0 && dist > 0) {
+          self._panRaw(pinch.mid.x - mid.x, pinch.mid.y - mid.y);
+          self._zoomAround(pinch.zoom + Math.log(dist / pinch.dist) / Math.LN2, mid);
         }
+        pinch.mid = mid;
+        self._scheduleRender(true);
         return;
       }
 
@@ -278,25 +382,64 @@
       var dy = e.clientY - last.y;
       moved += Math.abs(dx) + Math.abs(dy);
       last = { x: e.clientX, y: e.clientY };
-      self.panByPixels(-dx, -dy);
+      var t = now();
+      samples.push({ x: e.clientX, y: e.clientY, t: t });
+      while (samples.length > 2 && t - samples[0].t > 100) samples.shift();
+      self._panRaw(-dx, -dy);
+      self._scheduleRender(true);
     });
 
     function release(e) {
+      if (!pointers[e.pointerId]) return;
       delete pointers[e.pointerId];
-      if (pointerCount() < 2) pinchStart = null;
+      if (pointerCount() < 2 && pinch) {
+        pinch = null;
+        // Lifting one finger of a pinch shouldn't turn into a drag jump.
+        var ids = Object.keys(pointers);
+        if (ids.length === 1) {
+          last = { x: pointers[ids[0]].x, y: pointers[ids[0]].y };
+          samples = [];
+          dragging = true;
+          moved = 99;
+        }
+      }
       if (pointerCount() === 0) {
+        var rect = self.el.getBoundingClientRect();
+        var t = now();
         if (dragging && moved < 5) {
-          var rect = self.el.getBoundingClientRect();
-          self._emit('click', self.pointToLatLng(e.clientX - rect.left, e.clientY - rect.top));
+          var pt = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+          self._emit('click', self.pointToLatLng(pt.x, pt.y));
+          if (lastTap && t - lastTap.t < 320 && Math.hypot(pt.x - lastTap.x, pt.y - lastTap.y) < 30) {
+            self.zoomBy(1, pt, 320);
+            lastTap = null;
+          } else {
+            lastTap = { x: pt.x, y: pt.y, t: t };
+          }
+        } else if (dragging && samples.length >= 2) {
+          // Fling: carry on at the release speed and coast to a stop.
+          var a = samples[0], b = samples[samples.length - 1];
+          var span = b.t - a.t;
+          if (span > 0 && t - b.t < 60) {
+            var vx = (b.x - a.x) / span, vy = (b.y - a.y) / span;
+            var speed = Math.hypot(vx, vy);
+            if (speed > 0.25) {
+              var cap = 4 / speed; // keep a wild flick from throwing the map across a continent
+              if (cap < 1) { vx *= cap; vy *= cap; }
+              self._inertia = { vx: vx, vy: vy };
+              self._loop();
+            }
+          }
         }
         dragging = false;
         last = null;
+        samples = [];
         self.el.classList.remove('is-dragging');
       }
     }
 
     this.el.addEventListener('pointerup', release);
     this.el.addEventListener('pointercancel', release);
+    this.el.addEventListener('dblclick', function (e) { e.preventDefault(); });
   };
 
   MiniMap.prototype._pinchDistance = function (pointers) {
@@ -306,44 +449,96 @@
     return Math.hypot(a.x - b.x, a.y - b.y);
   };
 
+  /* Wheel and trackpad: every event nudges the zoom target by an amount
+   * proportional to how far the wheel moved, and the animation loop eases
+   * toward it — so a mouse notch is a short glide and a trackpad pinch
+   * (which browsers report as ctrl+wheel) tracks the fingers. */
   MiniMap.prototype._bindWheel = function () {
     var self = this;
-    var cooldown = 0;
     this.el.addEventListener('wheel', function (e) {
       e.preventDefault();
-      var now = Date.now();
-      if (now - cooldown < 120) return;
-      cooldown = now;
+      var px = e.deltaY;
+      if (e.deltaMode === 1) px *= 33;
+      else if (e.deltaMode === 2) px *= 600;
+      var dz = -px / (e.ctrlKey ? 100 : 220);
+      dz = clamp(dz, -1, 1);
+      if (!dz) return;
       var rect = self.el.getBoundingClientRect();
-      self.zoomBy(e.deltaY < 0 ? 1 : -1, { x: e.clientX - rect.left, y: e.clientY - rect.top });
+      self.zoomBy(dz, { x: e.clientX - rect.left, y: e.clientY - rect.top }, e.ctrlKey ? 90 : 220);
     }, { passive: false });
   };
 
-  MiniMap.prototype.panByPixels = function (dx, dy) {
-    // Dragging should follow the finger, not the map's underlying axes.
+  // Move the centre by screen pixels without rendering.
+  MiniMap.prototype._panRaw = function (dx, dy) {
     var d = this._rotateVector(dx, dy);
     var c = project(this.center.lat, this.center.lng, this.zoom);
     var next = unproject(c.x + d.x, c.y + d.y, this.zoom);
     this.center = { lat: clampLat(next.lat), lng: next.lng };
-    this.render();
-    this._emit('move', this.getView());
+  };
+
+  // Coalesce many input events into one render per frame.
+  MiniMap.prototype._scheduleRender = function (emitMove) {
+    if (emitMove) this._pendingMove = true;
+    if (this._renderQueued) return;
+    this._renderQueued = true;
+    var self = this;
+    global.requestAnimationFrame(function () {
+      self._renderQueued = false;
+      self.render();
+      if (self._pendingMove) {
+        self._pendingMove = false;
+        self._emit('move', self.getView());
+      }
+    });
+  };
+
+  MiniMap.prototype.panByPixels = function (dx, dy) {
+    // Dragging should follow the finger, not the map's underlying axes.
+    this._panRaw(dx, dy);
+    this._scheduleRender(true);
     return this;
   };
 
-  MiniMap.prototype.setMarker = function (id, lat, lng, className, label) {
+  /* opts.glide (ms): an existing marker slides from where it is to the new
+   * position instead of jumping. New markers always appear in place. */
+  MiniMap.prototype.setMarker = function (id, lat, lng, className, label, opts) {
     var marker = this.markers[id];
+    var glide = opts && opts.glide;
     if (!marker) {
       var el = document.createElement('div');
       el.className = 'mm-marker ' + (className || '');
       if (label) el.title = label;
       this.markerLayer.appendChild(el);
       marker = this.markers[id] = { el: el };
+      glide = 0;
     }
+    if (glide && marker.lat != null && (marker.lat !== lat || marker.lng !== lng)) {
+      marker.anim = { from: { lat: marker.lat, lng: marker.lng }, to: { lat: lat, lng: lng }, t0: now(), dur: glide };
+      if (label) marker.el.title = label;
+      this._loop();
+      return marker.el;
+    }
+    marker.anim = null;
     marker.lat = lat;
     marker.lng = lng;
     if (label) marker.el.title = label;
     this._placeMarkers();
     return marker.el;
+  };
+
+  // Advance gliding markers; true while any are still moving.
+  MiniMap.prototype._stepMarkers = function (t) {
+    var any = false;
+    for (var id in this.markers) {
+      var m = this.markers[id];
+      if (!m.anim) continue;
+      var k = Math.min(1, (t - m.anim.t0) / m.anim.dur);
+      var e = easeInOut(k);
+      m.lat = m.anim.from.lat + (m.anim.to.lat - m.anim.from.lat) * e;
+      m.lng = m.anim.from.lng + (m.anim.to.lng - m.anim.from.lng) * e;
+      if (k >= 1) m.anim = null; else any = true;
+    }
+    return any;
   };
 
   MiniMap.prototype.removeMarker = function (id) {
@@ -379,7 +574,7 @@
     Object.keys(this.markers).forEach(function (id) {
       var m = self.markers[id];
       var p = self.latLngToPoint(m.lat, m.lng);
-      m.el.style.transform = 'translate(' + (p.x + pad) + 'px,' + (p.y + pad) + 'px)' + upright;
+      m.el.style.transform = 'translate3d(' + (p.x + pad).toFixed(1) + 'px,' + (p.y + pad).toFixed(1) + 'px,0)' + upright;
     });
   };
 
@@ -459,21 +654,19 @@
     this.rotator.style.inset = (-pad) + 'px';
     this.rotator.style.transform = 'rotate(' + (-this.bearing) + 'deg)';
 
-    // Tiles are laid out against the rotator's box, which starts `pad` above
-    // and left of the viewport.
+    // Top-left of the rotator's box in world pixels at the current
+    // (possibly fractional) zoom.
     var o = this._origin();
     o = { x: o.x - pad, y: o.y - pad };
     var w = s.w + pad * 2;
     var h = s.h + pad * 2;
 
-    var z = this.zoom;
-    var n = Math.pow(2, z);
-    var minX = Math.floor(o.x / TILE);
-    var maxX = Math.floor((o.x + w) / TILE);
-    var minY = clamp(Math.floor(o.y / TILE), 0, n - 1);
-    var maxY = clamp(Math.floor((o.y + h) / TILE), 0, n - 1);
-
-    var box = { z: z, n: n, o: o, minX: minX, maxX: maxX, minY: minY, maxY: maxY };
+    /* Tiles only exist at whole zoom levels, so draw the nearest level and
+     * scale it by the leftover fraction. Tiles from the level we just left
+     * stay underneath, scaled the same way, until the new ones have loaded —
+     * so zooming never flashes blank. */
+    var z = clamp(Math.round(this.zoom), MIN_ZOOM, MAX_ZOOM);
+    var box = { z: z, o: o, w: w, h: h, zoom: this.zoom };
     this._renderTileLayer(this.tileLayer, this.tiles, this.tileUrl, box);
     this._renderTileLayer(this.overlayTileLayer, this.overlayTiles, this.overlayTileUrl, box);
 
@@ -482,8 +675,7 @@
   };
 
   /* One loop, two layers: the basemap and the optional overlay differ only
-   * in which cache and URL template they draw from, so they share this
-   * rather than keeping two copies of the same tiling arithmetic in step. */
+   * in which cache and URL template they draw from. */
   MiniMap.prototype._renderTileLayer = function (layerEl, cache, template, box) {
     var key;
     if (!template) {
@@ -494,39 +686,82 @@
       return;
     }
 
+    var self = this;
+    var z = box.z;
+    var n = Math.pow(2, z);
+    var k = Math.pow(2, box.zoom - z);      // on-screen scale of a level-z tile
+    var size = TILE * k;
+    var minX = Math.floor(box.o.x / size);
+    var maxX = Math.floor((box.o.x + box.w) / size);
+    var minY = clamp(Math.floor(box.o.y / size), 0, n - 1);
+    var maxY = clamp(Math.floor((box.o.y + box.h) / size), 0, n - 1);
+
     var wanted = Object.create(null);
+    var allLoaded = true;
 
-    for (var x = box.minX; x <= box.maxX; x++) {
-      for (var y = box.minY; y <= box.maxY; y++) {
+    for (var x = minX; x <= maxX; x++) {
+      for (var y = minY; y <= maxY; y++) {
         // Wrap horizontally so panning past the antimeridian keeps working.
-        var tx = ((x % box.n) + box.n) % box.n;
-        var k = box.z + '/' + tx + '/' + y + '@' + x;
-        wanted[k] = true;
+        var tx = ((x % n) + n) % n;
+        var kk = z + '/' + tx + '/' + y + '@' + x;
+        wanted[kk] = true;
 
-        var tile = cache[k];
+        var tile = cache[kk];
         if (!tile) {
           tile = document.createElement('img');
           tile.className = 'mm-tile';
           tile.alt = '';
           tile.decoding = 'async';
           tile.loading = 'eager';
-          tile.src = fillTemplate(template, box.z, tx, y);
-          tile.addEventListener('load', function () { this.classList.add('is-loaded'); });
-          tile.addEventListener('error', function () { this.classList.add('is-error'); });
+          tile._z = z; tile._x = x; tile._y = y;
+          tile.addEventListener('load', function () {
+            this.classList.add('is-loaded');
+            self._scheduleRender(false);
+          });
+          tile.addEventListener('error', function () {
+            this.classList.add('is-error');
+            self._scheduleRender(false);
+          });
+          tile.src = fillTemplate(template, z, tx, y);
           layerEl.appendChild(tile);
-          cache[k] = tile;
+          cache[kk] = tile;
         }
-        tile.style.transform = 'translate(' + (x * TILE - box.o.x) + 'px,' + (y * TILE - box.o.y) + 'px)';
+        if (!tile.classList.contains('is-loaded') && !tile.classList.contains('is-error')) allLoaded = false;
+        placeTile(tile, box, 2);
       }
     }
 
     for (key in cache) {
-      if (!wanted[key]) {
-        cache[key].remove();
-        delete cache[key];
+      if (wanted[key]) continue;
+      var t = cache[key];
+      // Keep a loaded tile from another level as a backdrop while this level
+      // fills in, as long as it's still on screen and not absurdly scaled.
+      if (!allLoaded && t._z !== z && Math.abs(t._z - z) <= 2 && t.classList.contains('is-loaded')) {
+        var tk = Math.pow(2, box.zoom - t._z) * TILE;
+        var left = t._x * tk - box.o.x, top = t._y * tk - box.o.y;
+        if (left < box.w && top < box.h && left + tk > 0 && top + tk > 0) {
+          placeTile(t, box, 1);
+          continue;
+        }
       }
+      t.remove();
+      delete cache[key];
     }
   };
+
+  function placeTile(tile, box, layer) {
+    var k = Math.pow(2, box.zoom - tile._z);
+    var size = TILE * k;
+    var left = tile._x * size - box.o.x;
+    var top = tile._y * size - box.o.y;
+    // A hair of overlap hides the seams fractional scaling would show.
+    var scale = (size + 0.6) / TILE;
+    tile.style.transform = 'translate3d(' + left.toFixed(2) + 'px,' + top.toFixed(2) + 'px,0) scale(' + scale.toFixed(5) + ')';
+    if (tile._layer !== layer) {
+      tile.style.zIndex = layer;
+      tile._layer = layer;
+    }
+  }
 
   MiniMap.metersPerPixel = metersPerPixel;
   MiniMap.MIN_ZOOM = MIN_ZOOM;
