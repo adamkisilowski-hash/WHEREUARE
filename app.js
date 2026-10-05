@@ -706,6 +706,7 @@
     $('weather-icon').textContent = info[1];
     $('weather-text').textContent = tempText + ' · ' + (info[0] ? t(info[0]) : '—');
     row.hidden = false;
+    renderSheetSummary();
   }
 
   /* ETA formatting, shared by anything that has a duration in seconds to
@@ -2012,19 +2013,42 @@
     renderSheetSummary();
   }
 
-  // The collapsed sheet's one line of text — coordinates until something
-  // more useful (like a street name) is available, and never blank.
+  // The collapsed sheet: where you are, plus the numbers that matter at a
+  // glance — speed, accuracy, altitude, heading — and a chip for the live
+  // trip distance (while recording) or the weather.
   function renderSheetSummary() {
     var dot = $('sheet-status-dot');
     var text = $('sheet-summary-text');
     if (!dot || !text) return;
     dot.classList.toggle('is-live', !!(state.prefs.live && state.watchId != null));
-    if (!state.position) {
+    var c = state.position && state.position.coords;
+    if (!c) {
       text.textContent = state.locateBusy ? t('sheet.findingYou') : t('sheet.locationUnavailable');
-      return;
+    } else {
+      text.textContent = state.streetName || (c.latitude.toFixed(4) + ', ' + c.longitude.toFixed(4));
     }
-    var c = state.position.coords;
-    text.textContent = state.streetName || (c.latitude.toFixed(4) + ', ' + c.longitude.toFixed(4));
+    setMini('mini-speed', c ? formatSpeed(c.speed) : '—');
+    setMini('mini-accuracy', c && c.accuracy != null ? '±' + formatDistance(c.accuracy) : '—');
+    setMini('mini-altitude', c ? formatAltitude(c.altitude) : '—');
+    setMini('mini-heading', c && c.heading != null && !isNaN(c.heading) ? Math.round(c.heading) + '° ' + compassPoint(c.heading) : '—');
+
+    var chip = $('mini-chip');
+    var label = '';
+    if (state.tracking) {
+      label = '● ' + t('mini.trip') + ' ' + formatDistance(trackDistance());
+    } else if (state.weather) {
+      var info = WEATHER_CODES[state.weather.code] || [null, '🌡️'];
+      var tc = state.weather.tempC;
+      label = info[1] + ' ' + (isMetric() ? Math.round(tc) + '°C' : Math.round(tc * 9 / 5 + 32) + '°F');
+    }
+    chip.hidden = !label;
+    chip.classList.toggle('is-trip', !!state.tracking);
+    if (chip.textContent !== label) chip.textContent = label;
+  }
+
+  function setMini(id, value) {
+    var el = $(id);
+    if (el && el.textContent !== value) el.textContent = value;
   }
 
   function renderTrip() {
@@ -2037,6 +2061,7 @@
     $('trip-max').textContent = state.maxSpeed > 0 ? formatSpeed(state.maxSpeed) : '—';
     $('trip-points').textContent = String(state.track.length);
     $('trip-climb').textContent = state.climb > 0 ? formatAltitude(state.climb) : '—';
+    renderSheetSummary();
   }
 
   function renderPlaces() {

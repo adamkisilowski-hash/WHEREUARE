@@ -122,8 +122,17 @@
     <button id="sheet-handle" class="sheet-handle" aria-expanded="false" aria-controls="sheet-body" aria-label="Expand details">
       <span class="sheet-grip" aria-hidden="true"></span>
       <span class="sheet-summary">
-        <span id="sheet-status-dot" class="sheet-status-dot"></span>
-        <span id="sheet-summary-text" class="sheet-summary-text">Finding you…</span>
+        <span class="mini-top">
+          <span id="sheet-status-dot" class="sheet-status-dot"></span>
+          <span id="sheet-summary-text" class="sheet-summary-text">Finding you…</span>
+          <span id="mini-chip" class="mini-chip" hidden></span>
+        </span>
+        <span class="mini-stats" aria-hidden="false">
+          <span class="mini-stat"><b id="mini-speed">—</b><i data-i18n="mini.speed">Speed</i></span>
+          <span class="mini-stat"><b id="mini-accuracy">—</b><i data-i18n="mini.accuracy">Accuracy</i></span>
+          <span class="mini-stat"><b id="mini-altitude">—</b><i data-i18n="mini.altitude">Altitude</i></span>
+          <span class="mini-stat"><b id="mini-heading">—</b><i data-i18n="mini.heading">Heading</i></span>
+        </span>
       </span>
     </button>
 
