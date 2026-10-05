@@ -168,6 +168,7 @@
     var verifyUser = null;
     var verifyTimer = 0;
     var lastSent = 0;
+    var registering = false;
 
     function vSet(id, msg) {
       var el = $(id);
@@ -178,10 +179,12 @@
 
     function sendVerification(user) {
       lastSent = Date.now();
+      try { sessionStorage.setItem('whereabouts.vsent.' + user.uid, String(lastSent)); } catch (e) {}
       return fbAuth.sendEmailVerification(user);
     }
 
     function showVerify(user) {
+      var firstShow = verifyUser !== user;
       verifyUser = user;
       $('app-root').hidden = true;
       $('auth-gate').hidden = false;
@@ -191,6 +194,18 @@
       $('auth-verify-text').textContent = t('auth.verify.text', { email: user.email });
       clearInterval(verifyTimer);
       verifyTimer = setInterval(function () { checkVerified(false); }, 4000);
+
+      // An account that existed before confirmation was required (or one you
+      // are signing back into) has never been sent a link, so send one now —
+      // once per browser session, and never right after registering, where
+      // the sign-up itself already sent it.
+      var already = false;
+      try { already = !!sessionStorage.getItem('whereabouts.vsent.' + user.uid); } catch (e) {}
+      if (firstShow && !registering && !already) {
+        sendVerification(user).then(function () {
+          vSet('auth-verify-status', t('auth.verify.resent'));
+        }).catch(function (err) { vSet('auth-verify-error', authErrorMessage(err)); });
+      }
     }
 
     function checkVerified(manual) {
@@ -279,6 +294,7 @@
       setError(null);
       setStatus(null);
       setBusy(true);
+      registering = mode !== 'signin';
       var action = mode === 'signin'
         ? fbAuth.signInWithEmailAndPassword(auth, email, password)
         : checkRealEmail(email).then(function (problem) {
@@ -289,7 +305,7 @@
           });
       action
         .catch(function (err) { setError(authErrorMessage(err)); })
-        .finally(function () { setBusy(false); });
+        .finally(function () { setBusy(false); registering = false; });
     });
 
     /* The avatar's dropdown — kept as three tiny functions rather than a
