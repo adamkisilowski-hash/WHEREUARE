@@ -2492,10 +2492,20 @@
       return c ? { lat: c.latitude, lng: c.longitude } : null;
     },
     onPosition: function (fn) { positionListeners.push(fn); },
-    setFriendMarker: function (id, lat, lng, label) {
+    // opts.color / opts.textColor: the colour you picked for this friend;
+    // without one the marker keeps the default monochrome outline style.
+    setFriendMarker: function (id, lat, lng, label, opts) {
       if (!map) return;
-      var el = map.setMarker('friend:' + id, lat, lng, 'mm-marker-friend', label);
-      if (!el.textContent) el.textContent = (label || '?').charAt(0).toUpperCase();
+      var el = map.setMarker('friend:' + id, lat, lng, 'mm-marker-friend', label, { glide: 800 });
+      var letter = (label || '?').charAt(0).toUpperCase();
+      if (el.textContent !== letter) el.textContent = letter;
+      var color = opts && opts.color;
+      el.classList.toggle('has-color', !!color);
+      el.style.background = color || '';
+      el.style.borderColor = color ? '#ffffff' : '';
+      el.style.color = color ? (opts.textColor || '#ffffff') : '';
+      // Name tag under the dot, so you can tell friends apart at a glance.
+      el.dataset.name = label || '';
     },
     removeFriendMarker: function (id) {
       if (map) map.removeMarker('friend:' + id);

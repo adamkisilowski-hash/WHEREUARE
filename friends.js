@@ -90,6 +90,55 @@
     var lastWriteAt = 0;
     var unsubs = [];
 
+    /* Nicknames and colours are private to you: your friend never sees what
+     * you called them. They're kept per account in localStorage so they work
+     * immediately, and mirrored to friendPrefs/{yourUid} in Firestore (only
+     * readable/writable by you — see firestore.rules) so they follow you to
+     * other devices. If those rules haven't been published yet the Firestore
+     * half just fails quietly and everything still works on this device. */
+    var FRIEND_COLORS = ['#e53935', '#fb8c00', '#fdd835', '#43a047', '#00acc1',
+                         '#1e88e5', '#3949ab', '#8e24aa', '#d81b60', '#6d4c41'];
+    var friendPrefs = {};      // friendUid -> { nick, color }
+    var editingUid = null;     // whose editor is open
+    var draft = null;          // { nick, color } while editing
+
+    function prefsKey() { return 'whereabouts.friendPrefs.' + currentUid; }
+
+    function loadLocalPrefs() {
+      try { friendPrefs = JSON.parse(localStorage.getItem(prefsKey()) || '{}') || {}; }
+      catch (e) { friendPrefs = {}; }
+    }
+
+    function savePrefs() {
+      try { localStorage.setItem(prefsKey(), JSON.stringify(friendPrefs)); } catch (e) {}
+      if (currentUid) {
+        setDoc(doc(db, 'friendPrefs', currentUid), { prefs: friendPrefs, updatedAt: serverTimestamp() })
+          .catch(function () {});
+      }
+    }
+
+    function prefOf(uid) { return friendPrefs[uid] || {}; }
+
+    function displayName(uid) {
+      var nick = prefOf(uid).nick;
+      return nick || emailByUid[uid] || uid;
+    }
+
+    // Black or white text, whichever reads better on the chosen colour.
+    function textOn(hex) {
+      var n = parseInt(hex.slice(1), 16);
+      var r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+      return (0.299 * r + 0.587 * g + 0.114 * b) > 160 ? '#111111' : '#ffffff';
+    }
+
+    function friendDot(uid) {
+      var c = prefOf(uid).color;
+      var letter = escapeHtml((displayName(uid) || '?').charAt(0).toUpperCase());
+      return c
+        ? '<span class="friend-dot" style="background:' + c + ';color:' + textOn(c) + ';border-color:' + c + '">' + letter + '</span>'
+        : '<span class="friend-dot">' + letter + '</span>';
+    }
+
     function toDocObj(d) { var o = d.data(); o.id = d.id; return o; }
 
     function setAddError(msg) {
@@ -124,7 +173,12 @@
       if (!window.Whereabouts) return;
       var f = friendLocations[uid];
       if (!f || !f.sharing || f.lat == null) { window.Whereabouts.removeFriendMarker(uid); return; }
-      window.Whereabouts.setFriendMarker(uid, f.lat, f.lng, emailByUid[uid] || uid);
+      var c = prefOf(uid).color || null;
+      // On the map a bare email is too long for the name tag — use the part
+      // before the @ unless you've given them a nickname.
+      var tag = prefOf(uid).nick || String(emailByUid[uid] || uid).split('@')[0];
+      window.Whereabouts.setFriendMarker(uid, f.lat, f.lng, tag,
+        { color: c, textColor: c ? textOn(c) : null });
     }
 
     function dropFriendLocation(uid) {
@@ -221,16 +275,92 @@
       var ul = $('friends-list');
       ul.innerHTML = friendships.map(function (f) {
         var otherUid = f.uids[0] === currentUid ? f.uids[1] : f.uids[0];
-        return '<li class="friend-item" data-id="' + f.id + '">' +
-          '<span class="friend-main"><span class="friend-name">' + escapeHtml(emailByUid[otherUid]) + '</span>' +
+        var nick = prefOf(otherUid).nick;
+        var row = '<li class="friend-item" data-id="' + f.id + '" data-uid="' + escapeHtml(otherUid) + '">' +
+          friendDot(otherUid) +
+          '<span class="friend-main"><span class="friend-name">' + escapeHtml(displayName(otherUid)) + '</span>' +
+          (nick ? '<span class="friend-email">' + escapeHtml(emailByUid[otherUid]) + '</span>' : '') +
           '<span class="friend-meta">' + escapeHtml(friendMeta(otherUid)) + '</span></span>' +
+          '<button class="friend-edit" type="button" data-action="edit" title="' + escapeHtml(t('friends.editTitle')) + '" aria-label="' + escapeHtml(t('friends.editTitle')) + '">✎</button>' +
           '<button class="friend-del" type="button" data-action="remove" title="' + escapeHtml(t('friends.removeTitle')) + '">×</button>' +
         '</li>';
+        if (editingUid === otherUid) row += editorHtml(otherUid);
+        return row;
       }).join('');
       bindRowAction(ul, '[data-action="remove"]', function (id) {
         deleteDoc(doc(db, 'friendships', id)).catch(function () {});
       });
+      ul.querySelectorAll('[data-action="edit"]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var uid = btn.closest('li').dataset.uid;
+          if (editingUid === uid) { closeEditor(); return; }
+          editingUid = uid;
+          var p = prefOf(uid);
+          draft = { nick: p.nick || '', color: p.color || null };
+          renderFriends();
+          var input = $('friend-nick-input');
+          if (input) { input.focus(); input.select(); }
+        });
+      });
+      bindEditor();
       Object.keys(friendLocations).forEach(updateFriendMarker);
+    }
+
+    function editorHtml(uid) {
+      var swatches = '<button type="button" class="friend-swatch friend-swatch-none' + (!draft.color ? ' is-active' : '') +
+        '" data-color="" title="' + escapeHtml(t('friends.colorNone')) + '" aria-label="' + escapeHtml(t('friends.colorNone')) + '"></button>' +
+        FRIEND_COLORS.map(function (c) {
+          return '<button type="button" class="friend-swatch' + (draft.color === c ? ' is-active' : '') +
+            '" data-color="' + c + '" style="background:' + c + '" aria-label="' + c + '"></button>';
+        }).join('');
+      return '<li class="friend-editor" data-uid="' + escapeHtml(uid) + '">' +
+        '<label class="auth-field"><span>' + escapeHtml(t('friends.nickLabel')) + '</span>' +
+          '<input id="friend-nick-input" type="text" maxlength="30" autocomplete="off" value="' + escapeHtml(draft.nick) +
+          '" placeholder="' + escapeHtml(t('friends.nickPlaceholder')) + '"></label>' +
+        '<span class="friend-editor-label">' + escapeHtml(t('friends.colorLabel')) + '</span>' +
+        '<div class="friend-swatches" role="group">' + swatches + '</div>' +
+        '<div class="friend-editor-actions">' +
+          '<button type="button" class="btn" data-action="cancel-edit">' + escapeHtml(t('friends.cancel')) + '</button>' +
+          '<button type="button" class="btn btn-primary" data-action="save-edit">' + escapeHtml(t('friends.save')) + '</button>' +
+        '</div>' +
+      '</li>';
+    }
+
+    function bindEditor() {
+      var ed = document.querySelector('#friends-list .friend-editor');
+      if (!ed) return;
+      var input = $('friend-nick-input');
+      input.addEventListener('input', function () { draft.nick = input.value; });
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); saveEditor(); }
+        if (e.key === 'Escape') { e.preventDefault(); closeEditor(); }
+      });
+      ed.querySelectorAll('.friend-swatch').forEach(function (b) {
+        b.addEventListener('click', function () {
+          draft.color = b.dataset.color || null;
+          ed.querySelectorAll('.friend-swatch').forEach(function (x) { x.classList.toggle('is-active', x === b); });
+        });
+      });
+      ed.querySelector('[data-action="cancel-edit"]').addEventListener('click', closeEditor);
+      ed.querySelector('[data-action="save-edit"]').addEventListener('click', saveEditor);
+    }
+
+    function closeEditor() {
+      editingUid = null;
+      draft = null;
+      renderFriends();
+    }
+
+    function saveEditor() {
+      if (!editingUid || !draft) return;
+      var nick = (draft.nick || '').trim().slice(0, 30);
+      var entry = {};
+      if (nick) entry.nick = nick;
+      if (draft.color) entry.color = draft.color;
+      if (entry.nick || entry.color) friendPrefs[editingUid] = entry;
+      else delete friendPrefs[editingUid];
+      savePrefs();
+      closeEditor();
     }
 
     async function acceptRequest(req) {
@@ -325,6 +455,9 @@
       outgoing = [];
       friendships = [];
       emailByUid = {};
+      friendPrefs = {};
+      editingUid = null;
+      draft = null;
       sharing = false;
       lastWriteAt = 0;
       currentUid = null;
@@ -353,6 +486,19 @@
       currentUid = user.uid;
       currentEmail = user.email;
       $('tab-friends').hidden = false;
+      loadLocalPrefs();
+
+      // Nicknames/colours from your other devices. Remote wins when present;
+      // if the rule for friendPrefs isn't published this just errors quietly.
+      unsubs.push(onSnapshot(doc(db, 'friendPrefs', currentUid), function (snap) {
+        if (!snap.exists() || snap.metadata.hasPendingWrites) return;
+        var remote = snap.data().prefs;
+        if (!remote || typeof remote !== 'object') return;
+        friendPrefs = remote;
+        try { localStorage.setItem(prefsKey(), JSON.stringify(friendPrefs)); } catch (e) {}
+        if (!editingUid) renderFriends();
+        else Object.keys(friendLocations).forEach(updateFriendMarker);
+      }, function () {}));
 
       // Claim/refresh our own lookup entry so a friend searching our email
       // finds us — idempotent, safe to redo on every sign-in.

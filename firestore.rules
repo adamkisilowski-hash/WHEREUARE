@@ -38,6 +38,12 @@
 //   both uids. There's no separate "am I sharing" check in the read rule —
 //   sharing:false and the absence of a document look the same to a friend
 //   because the client only ever renders a marker when sharing is true.
+//
+// friendPrefs/{uid} -> { prefs: { friendUid: { nick, color } }, updatedAt }
+//   The nicknames and map colours you've given your friends. Private to
+//   you: only the owner can read or write it — a friend never sees what
+//   you called them. (Without this rule the app still works, it just keeps
+//   nicknames on the current device only.)
 
 rules_version = '2';
 service cloud.firestore {
@@ -82,6 +88,10 @@ service cloud.firestore {
         && pairIdParam == pairId(request.resource.data.uids[0], request.resource.data.uids[1]);
       allow delete: if isSignedIn() && request.auth.uid in resource.data.uids;
       allow update: if false;
+    }
+
+    match /friendPrefs/{uid} {
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
     }
 
     match /locations/{uid} {

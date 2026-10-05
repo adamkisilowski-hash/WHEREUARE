@@ -1885,3 +1885,116 @@ body.is-immersive .sheet { display: none; }
 .mm-marker-veh { animation: veh-in 0.4s ease-out; }
 @keyframes veh-in { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .mm-marker-veh { animation: none; } }
+
+/* ------------------------------------------- friend nicknames & colours */
+.friend-dot {
+  flex: none;
+  align-self: center;
+  width: 26px;
+  height: 26px;
+  margin-left: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--text);
+  background: var(--surface);
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  box-sizing: border-box;
+}
+
+.friend-email {
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.friend-edit {
+  flex: none;
+  width: 38px;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: none;
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.friend-edit:hover { background: var(--accent-soft); color: var(--text); }
+
+.friend-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  margin-top: -2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.friend-editor-label {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.friend-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.friend-swatch {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  box-shadow: 0 0 0 1px var(--border);
+  cursor: pointer;
+  padding: 0;
+}
+
+.friend-swatch.is-active {
+  border-color: var(--surface);
+  box-shadow: 0 0 0 2px var(--text);
+}
+
+.friend-swatch-none {
+  background:
+    linear-gradient(135deg, transparent 45%, var(--text-dim) 45%, var(--text-dim) 55%, transparent 55%),
+    var(--surface);
+}
+
+.friend-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Coloured friend markers, with the nickname as a small tag underneath. */
+.mm-marker-friend.has-color {
+  border-width: 3px;
+}
+
+.mm-marker-friend[data-name]:not([data-name=""])::after {
+  content: attr(data-name);
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--glass);
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
