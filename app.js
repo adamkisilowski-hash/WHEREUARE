@@ -1018,7 +1018,6 @@
     state.prefs.trainMode = on;
     savePrefs();
     map.setOverlayTileUrl(on ? RAILWAY_TILES : null);
-    $('tab-train').hidden = !on;
     applyToggleLabels();
 
     if (on) {
@@ -2133,8 +2132,9 @@
    * both light and dark; the default (null) removes the override and lets
    * the theme-aware stylesheet value take back over. */
   var ACCENT_PRESETS = [
-    '#000000', '#262626', '#404040', '#595959',
-    '#737373', '#8c8c8c', '#a6a6a6', '#bfbfbf', '#d9d9d9'
+    '#0a84ff', '#5e5ce6', '#bf5af2', '#ff375f', '#ff453a',
+    '#ff9f0a', '#ffd60a', '#30d158', '#00c7be', '#64d2ff',
+    '#8e8e93', '#000000'
   ];
 
   function hexToRgb(hex) {
@@ -2237,6 +2237,7 @@
       t.classList.toggle('is-active', active);
       t.setAttribute('aria-selected', active ? 'true' : 'false');
     });
+    moveSegPill(true);
     document.querySelectorAll('.tab-panel').forEach(function (p) {
       p.classList.toggle('is-active', p.dataset.panel === name);
     });
@@ -2268,27 +2269,43 @@
     $('train-state').textContent = t(state.prefs.trainMode ? 'train.on' : 'train.off');
     $('train-toggle').classList.toggle('is-on', !!state.prefs.trainMode);
     $('train-toggle').setAttribute('aria-pressed', state.prefs.trainMode ? 'true' : 'false');
+    $('train-body').hidden = !state.prefs.trainMode;
+    $('train-intro').hidden = !!state.prefs.trainMode;
   }
 
-  /* The map's controls live behind one settings button rather than sitting
-   * on the map permanently. The gear's rotation is a plain CSS transition
-   * between two angles, which means the closing spin runs backwards through
-   * the same arc for free — no second animation, and an interrupted click
-   * reverses from wherever it had got to rather than jumping. */
-  function setMapToolsOpen(on) {
-    state.mapToolsOpen = on;
-    $('map-controls').classList.toggle('is-open', on);
-    var btn = $('map-settings');
-    btn.setAttribute('aria-expanded', on ? 'true' : 'false');
-    btn.title = t(on ? 'controls.settingsOpen' : 'controls.settings');
-    btn.setAttribute('aria-label', btn.title);
+  /* ------------------------------------------------ liquid glass slider */
+
+  /* The tab bar is a glass track with one translucent "lens" that slides
+   * under the active tab. It stretches on the way (a stretch/settle class
+   * toggled around each move) so it reads as a drop of liquid rather than
+   * a rectangle teleporting; with several tabs the track scrolls sideways
+   * and the active tab is kept in view. */
+  var segTimer = 0;
+  function moveSegPill(animate) {
+    var nav = $('tabs'), pill = $('seg-pill');
+    if (!nav || !pill) return;
+    var active = nav.querySelector('.tab.is-active');
+    if (!active || active.hidden || !active.offsetWidth) { pill.style.opacity = '0'; return; }
+    var left = active.offsetLeft, width = active.offsetWidth;
+    pill.style.opacity = '1';
+    if (animate && pill.dataset.ready === '1') {
+      pill.classList.add('is-moving');
+      clearTimeout(segTimer);
+      segTimer = setTimeout(function () { pill.classList.remove('is-moving'); }, 380);
+    } else {
+      pill.style.transition = 'none';
+      requestAnimationFrame(function () { pill.style.transition = ''; });
+    }
+    pill.style.width = width + 'px';
+    pill.style.transform = 'translateX(' + left + 'px)';
+    pill.dataset.ready = '1';
+    var viewLeft = nav.scrollLeft, viewRight = viewLeft + nav.clientWidth;
+    if (left < viewLeft + 8 || left + width > viewRight - 8) {
+      nav.scrollTo({ left: Math.max(0, left - (nav.clientWidth - width) / 2), behavior: animate ? 'smooth' : 'auto' });
+    }
   }
 
   function wireUI() {
-    $('map-settings').addEventListener('click', function () {
-      setMapToolsOpen(!state.mapToolsOpen);
-    });
-
     $('accent-default').addEventListener('click', function () { setAccent(null); });
     // 'input' fires live as the native picker moves, so the whole app tints
     // under your finger; the value is only committed to prefs on 'change'.
@@ -2319,6 +2336,21 @@
       if (hit) { if (hit.id !== state.vcard.id) openVehicleCard(hit); }
       else closeVehicleCard();
     });
+
+    // The lens has to follow the tabs whenever they change size or appear
+    // (language switch, Friends tab showing up after sign-in, rotation).
+    var segRefresh = function () { moveSegPill(false); };
+    window.addEventListener('resize', segRefresh);
+    if (window.MutationObserver) {
+      new MutationObserver(segRefresh).observe($('tabs'), { attributes: true, attributeFilter: ['hidden'], subtree: true, childList: true, characterData: true });
+    }
+    if (window.ResizeObserver) {
+      var ro = new ResizeObserver(segRefresh);
+      ro.observe($('tabs'));
+      ro.observe($('sheet'));
+    }
+    setTimeout(segRefresh, 60);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(segRefresh);
 
     document.querySelectorAll('.tab').forEach(function (tab) {
       tab.addEventListener('click', function () {
@@ -2589,7 +2621,6 @@
     // there's a fix to query with.
     if (state.prefs.trainMode) {
       map.setOverlayTileUrl(RAILWAY_TILES);
-      $('tab-train').hidden = false;
       setTimeout(startVehicles, 0);
     }
 
@@ -2602,7 +2633,6 @@
     renderAccentSwatches();
     // Collapsed to just the gear on load — sets the button's own label and
     // aria-expanded rather than leaving them to the markup's defaults.
-    setMapToolsOpen(false);
     renderLive();
     renderSheetSummary();
     renderCompass();
@@ -2631,7 +2661,6 @@
       if (state.position) renderNow(); else renderSheetSummary();
       renderTrip();
       setImmersive(state.immersive);
-      setMapToolsOpen(state.mapToolsOpen);
       $('sheet-handle').setAttribute('aria-label', state.sheetExpanded ? t('sheet.collapse') : t('sheet.expand'));
     });
 
