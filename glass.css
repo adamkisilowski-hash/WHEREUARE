@@ -1157,3 +1157,17 @@ input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px 
 .panel-head h1::before { content: none; display: none; }
 .panel-head h1 { gap: 0; }
 .stats.stats-1 { grid-template-columns: 1fr; }
+
+/* ===================================================== lighter tab change
+ * Switching category now only cross-fades the panel (opacity runs on the
+ * compositor) and nothing inside it animates on arrival, so the lens glide
+ * is the only thing moving. */
+.tab-panel.is-active,
+.sheet-body[data-dir="back"] .tab-panel.is-active {
+  animation: panel-fade 0.16s ease-out both;
+}
+@keyframes panel-fade { from { opacity: 0; } to { opacity: 1; } }
+.tab-panel.is-active :where(.stat, .coords, .place, .friend, .veh-item, .ts-item, .train-stop, .ts-results, .ts-deps, .ms-train, .panel-section, .ts) {
+  animation: none !important;
+}
+.tab-panel { contain: layout style; }

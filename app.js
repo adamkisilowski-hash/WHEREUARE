@@ -2482,6 +2482,11 @@
     if (!active || active.hidden || !active.offsetWidth) { pill.style.opacity = '0'; return; }
     pill.style.opacity = '1';
     var slot = segSlot(active);
+    // A refresh that finds nothing moved (the sheet resizing under a panel
+    // change, an animationend, a font tick) must not touch the lens: snapping
+    // it to its own target would cancel the glide that is in progress.
+    if (!animate && seg.ready && !seg.drag &&
+        Math.abs(slot.left - seg.tx) < 0.5 && Math.abs(slot.width - seg.tw) < 0.5) return;
     seg.tx = slot.left;
     seg.tw = slot.width;
 
@@ -2653,7 +2658,8 @@
       tab.addEventListener('click', function () {
         activateTab(tab.dataset.tab);
         state.prefs.activeTab = tab.dataset.tab;
-        savePrefs();
+        // Storage is synchronous; keep it off the frame that starts the glide.
+        setTimeout(savePrefs, 250);
       });
     });
 
