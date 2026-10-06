@@ -2406,11 +2406,40 @@
       var tr = range.getBoundingClientRect();
       if (tr.width) {
         var nr = nav.getBoundingClientRect();
-        var center = tr.left - nr.left - nav.clientLeft + nav.scrollLeft + tr.width / 2;
+        // Screen rectangles are scaled by any transform on the sheet (it
+        // rises and settles with one), so convert back to layout pixels
+        // first; otherwise a measurement taken mid-animation is off by a
+        // few pixels and stays that way.
+        var s = nav.offsetWidth ? nr.width / nav.offsetWidth : 1;
+        if (!(s > 0.2)) s = 1;
+        var center = (tr.left - nr.left) / s - nav.clientLeft + nav.scrollLeft + tr.width / s / 2;
         return { left: center - w / 2, width: w };
       }
     }
     return { left: tab.offsetLeft, width: w };
+  }
+
+  // Ground-truth check: once the lens is at rest, compare where it really is
+  // on screen with where the word really is, and nudge it if they differ.
+  function segVerify() {
+    var nav = $('tabs'), pill = $('seg-pill');
+    if (!nav || !pill || seg.drag || seg.raf) return;
+    var active = nav.querySelector('.tab.is-active');
+    if (!active || active.hidden || !active.offsetWidth) return;
+    var node = active.firstChild;
+    if (!node || node.nodeType !== 3 || !node.textContent.trim()) return;
+    var range = document.createRange();
+    range.selectNodeContents(node);
+    var tr = range.getBoundingClientRect(), pr = pill.getBoundingClientRect();
+    if (!tr.width || !pr.width) return;
+    var nr = nav.getBoundingClientRect();
+    var s = nav.offsetWidth ? nr.width / nav.offsetWidth : 1;
+    if (!(s > 0.2)) s = 1;
+    var delta = ((tr.left + tr.width / 2) - (pr.left + pr.width / 2)) / s;
+    if (Math.abs(delta) > 0.6 && Math.abs(delta) < 80) {
+      seg.x += delta; seg.tx += delta;
+      segRender();
+    }
   }
 
   function segFrame(now) {
@@ -2444,6 +2473,7 @@
     if (settled) {
       seg.x = seg.tx; seg.w = seg.tw; seg.vx = seg.vw = 0; seg.grab = seg.grabT; seg.vg = 0;
       segRender();
+      setTimeout(segVerify, 60);
       return;
     }
     seg.raf = requestAnimationFrame(segFrame);
@@ -2617,6 +2647,19 @@
     }
     setTimeout(segRefresh, 60);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(segRefresh);
+    // Re-measure once the sheet has finished rising / resizing, and once the
+    // bar has stopped scrolling, so the lens never rests slightly off.
+    var segSettle = function () { moveSegPill(false); setTimeout(segVerify, 30); };
+    $('sheet').addEventListener('transitionend', function (e) { if (e.target === $('sheet')) segSettle(); });
+    $('sheet').addEventListener('animationend', segSettle);
+    window.addEventListener('orientationchange', function () { setTimeout(segSettle, 250); });
+    var segScrollTimer = 0;
+    $('tabs').addEventListener('scroll', function () {
+      clearTimeout(segScrollTimer);
+      segScrollTimer = setTimeout(segVerify, 140);
+    }, { passive: true });
+    setTimeout(segSettle, 600);
+    setTimeout(segSettle, 1500);
 
     document.querySelectorAll('.tab').forEach(function (tab) {
       tab.addEventListener('click', function () {
