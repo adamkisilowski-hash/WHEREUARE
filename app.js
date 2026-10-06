@@ -1812,20 +1812,10 @@
     var c = pos.coords;
     $('lat').textContent = formatLat(c.latitude);
     $('lng').textContent = formatLng(c.longitude);
-    $('accuracy').textContent = c.accuracy != null ? '±' + formatDistance(c.accuracy) : '—';
     $('altitude').textContent = formatAltitude(c.altitude);
-    $('speed').textContent = formatSpeed(c.speed);
-    $('heading').textContent = (c.heading != null && !isNaN(c.heading))
-      ? Math.round(c.heading) + '° ' + compassPoint(c.heading)
-      : '—';
     $('fix-age').textContent = t('now.fixFrom', { time: relativeTime(pos.timestamp) }) +
       (state.tracking ? t('now.recordingTrip') : '');
 
-    var quality = precisionOf(c.accuracy);
-    $('precision').dataset.quality = quality.key;
-    $('precision-text').textContent = c.accuracy != null
-      ? quality.label + ' · ±' + formatDistance(c.accuracy)
-      : quality.label;
     if (c.accuracy != null && c.accuracy <= 500) clearBanner('precision');
     maybeAdviseOnPrecision(c.accuracy);
 
@@ -2608,8 +2598,6 @@
       setAccent(this.value);
     });
 
-    $('zoom-in').addEventListener('click', function () { map.zoomBy(1); });
-    $('zoom-out').addEventListener('click', function () { map.zoomBy(-1); });
 
     // Recenter now doubles as "find me": one control, always a fresh fix,
     // rather than a separate always-visible pill for the same job.
@@ -2710,20 +2698,6 @@
 
     $('train-toggle').addEventListener('click', function () {
       setTrainMode(!state.prefs.trainMode);
-    });
-
-    $('copy').addEventListener('click', function () {
-      if (!state.position) { toast(t('toast.noFix')); return; }
-      var c = state.position.coords;
-      var text = c.latitude.toFixed(6) + ', ' + c.longitude.toFixed(6);
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(
-          function () { toast(t('toast.copied', { text: text })); },
-          function () { toast(text); }
-        );
-      } else {
-        toast(text);
-      }
     });
 
     $('share').addEventListener('click', function () {

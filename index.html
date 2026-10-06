@@ -21,7 +21,7 @@
 <meta name="theme-color" id="theme-color" content="#ffffff">
 
 <link rel="stylesheet" href="styles.css?v=202610052013">
-<link rel="stylesheet" href="glass.css?v=202610052013">
+<link rel="stylesheet" href="glass.css?v=202610061448">
 </head>
 <body>
 
@@ -75,10 +75,6 @@
 
     <div id="map-controls" class="map-controls is-open">
       <div id="map-tools" class="map-tools">
-        <div class="map-pod map-pod-subtle" role="group" aria-label="Zoom controls">
-          <button id="zoom-in" class="mc-btn mc-btn-subtle" data-i18n-title="controls.zoomIn">+</button>
-          <button id="zoom-out" class="mc-btn mc-btn-subtle" data-i18n-title="controls.zoomOut">−</button>
-        </div>
         <div class="map-pod" role="group" aria-label="Location controls">
           <button id="recenter" class="mc-btn" data-i18n-title="controls.recenter">
             <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -179,17 +175,10 @@
           <span class="coord-label" data-i18n="now.longitude">Longitude</span>
           <span id="lng" class="coord-value">—</span>
         </div>
-        <div id="precision" class="precision">
-          <span class="precision-dot"></span>
-          <span id="precision-text" data-i18n="precision.waiting">Waiting for a fix</span>
-        </div>
       </div>
 
-      <div class="stats">
-        <div class="stat"><span class="stat-label" data-i18n="now.accuracy">Accuracy</span><span id="accuracy" class="stat-value">—</span></div>
+      <div class="stats stats-1">
         <div class="stat"><span class="stat-label" data-i18n="now.altitude">Altitude</span><span id="altitude" class="stat-value">—</span></div>
-        <div class="stat"><span class="stat-label" data-i18n="now.speed">Speed</span><span id="speed" class="stat-value">—</span></div>
-        <div class="stat"><span class="stat-label" data-i18n="now.heading">Heading</span><span id="heading" class="stat-value">—</span></div>
       </div>
 
       <div id="weather-row" class="weather-row" hidden>
@@ -205,7 +194,6 @@
       </div>
 
       <div class="actions">
-        <button id="copy" class="btn" data-i18n="now.copy">Copy coordinates</button>
         <button id="share" class="btn" data-i18n="now.share">Share</button>
         <button id="save-place" class="btn btn-primary" data-i18n="now.savePlace">Save this place</button>
       </div>
@@ -370,7 +358,7 @@
 <script src="i18n.js?v=202610052013"></script>
 <script src="firebase-config.js?v=202610052013"></script>
 <script src="map.js?v=202610052013"></script>
-<script src="app.js?v=202610061443"></script>
+<script src="app.js?v=202610061448"></script>
 <script type="module" src="auth.js?v=202610052013"></script>
 <script type="module" src="friends.js?v=202610052013"></script>
 </body>

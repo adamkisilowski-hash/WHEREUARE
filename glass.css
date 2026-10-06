@@ -1152,3 +1152,8 @@ input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px 
 .ts-item { align-items: center; text-align: left; }
 .ts-item .train-stop-name { flex: 1; text-align: left; }
 .ts-item .veh-badge { flex: none; }
+
+/* ---------------------------------------------- removed: logo orb, extras */
+.panel-head h1::before { content: none; display: none; }
+.panel-head h1 { gap: 0; }
+.stats.stats-1 { grid-template-columns: 1fr; }
