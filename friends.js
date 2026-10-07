@@ -75,7 +75,7 @@
         deleteDoc = fbStore.deleteDoc, onSnapshot = fbStore.onSnapshot,
         collection = fbStore.collection, query = fbStore.query, where = fbStore.where,
         addDoc = fbStore.addDoc, serverTimestamp = fbStore.serverTimestamp,
-        writeBatch = fbStore.writeBatch;
+        writeBatch = fbStore.writeBatch, orderBy = fbStore.orderBy, limit = fbStore.limit;
 
     // Firestore's free tier and any project's wallet both prefer this stay
     // rare — the same frugal-by-default stance train mode takes with
@@ -89,6 +89,10 @@
     var emailByUid = {};
     var lastWriteAt = 0;
     var unsubs = [];
+    var chatMeta = {};         // pairId -> { lastFrom, lastAt(ms), lastText }
+    var chatOpen = null;       // { pid, uid } while a conversation is showing
+    var chatUnsub = null;
+    var chatMsgs = [];
 
     /* Nicknames and colours are private to you: your friend never sees what
      * you called them. They're kept per account in localStorage so they work
@@ -140,6 +144,175 @@
     }
 
     function toDocObj(d) { var o = d.data(); o.id = d.id; return o; }
+
+    /* ---------------------------------------------------------------- chat */
+
+    /* One conversation per friendship, stored under chats/{pairId}. A small
+     * summary document (last text/sender/time) powers the unread dots with a
+     * single listener; the messages themselves are only subscribed to while
+     * a conversation is open, newest 60, so a quiet chat costs nothing. The
+     * "read up to" mark is kept on this device. */
+    var CHAT_LIMIT = 60;
+
+    function readKey() { return 'whereabouts.chatRead.' + currentUid; }
+    function readMarks() {
+      try { return JSON.parse(localStorage.getItem(readKey()) || '{}') || {}; } catch (e) { return {}; }
+    }
+    function markRead(pid) {
+      var m = readMarks();
+      m[pid] = Date.now();
+      try { localStorage.setItem(readKey(), JSON.stringify(m)); } catch (e) {}
+      renderUnread();
+    }
+    function isUnread(pid) {
+      var c = chatMeta[pid];
+      if (!c || !c.lastFrom || c.lastFrom === currentUid) return false;
+      if (chatOpen && chatOpen.pid === pid) return false;
+      return c.lastAt > (readMarks()[pid] || 0);
+    }
+    function renderUnread() {
+      var any = false;
+      document.querySelectorAll('#friends-list .friend-item').forEach(function (li) {
+        var un = isUnread(li.dataset.id);
+        any = any || un;
+        li.classList.toggle('has-unread', un);
+        var btn = li.querySelector('.friend-chat');
+        if (btn) btn.classList.toggle('is-unread', un);
+      });
+      // Rows can be missing while the list is re-rendering; check the data too.
+      Object.keys(chatMeta).forEach(function (pid) { if (isUnread(pid)) any = true; });
+      $('tab-friends').classList.toggle('has-unread', any);
+    }
+
+    function dayLabel(d) {
+      var today = new Date(); today.setHours(0, 0, 0, 0);
+      var that = new Date(d); that.setHours(0, 0, 0, 0);
+      var diff = Math.round((today - that) / 86400000);
+      if (diff === 0) return t('chat.today');
+      if (diff === 1) return t('chat.yesterday');
+      try {
+        return d.toLocaleDateString(document.documentElement.lang || undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+      } catch (e) { return d.toDateString(); }
+    }
+    function clock(d) {
+      try { return d.toLocaleTimeString(document.documentElement.lang || undefined, { hour: '2-digit', minute: '2-digit' }); }
+      catch (e) { return ''; }
+    }
+
+    function renderChat(stick) {
+      var log = $('chat-log');
+      var nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+      if (!chatMsgs.length) {
+        log.innerHTML = '<p class="chat-empty muted">' + escapeHtml(t('chat.empty')) + '</p>';
+        return;
+      }
+      var html = '', lastDay = '', prevFrom = null;
+      chatMsgs.forEach(function (m) {
+        var d = m.at;
+        var day = d.toDateString();
+        if (day !== lastDay) {
+          html += '<div class="chat-day"><span>' + escapeHtml(dayLabel(d)) + '</span></div>';
+          lastDay = day; prevFrom = null;
+        }
+        var mine = m.from === currentUid;
+        html += '<div class="chat-row ' + (mine ? 'is-mine' : 'is-theirs') + (prevFrom === m.from ? ' is-follow' : '') + '">' +
+          '<div class="chat-bubble' + (m.pending ? ' is-pending' : '') + '">' +
+            '<span class="chat-text">' + escapeHtml(m.text) + '</span>' +
+            '<span class="chat-time">' + escapeHtml(clock(d)) + '</span>' +
+          '</div></div>';
+        prevFrom = m.from;
+      });
+      log.innerHTML = html;
+      if (stick || nearBottom) log.scrollTop = log.scrollHeight;
+    }
+
+    function chatError(msg) {
+      var el = $('chat-error');
+      el.textContent = msg || '';
+      el.hidden = !msg;
+    }
+
+    function openChat(pid, uid) {
+      closeChat(true);
+      chatOpen = { pid: pid, uid: uid };
+      chatMsgs = [];
+      chatError(null);
+      $('chat-name').textContent = displayName(uid);
+      $('chat-dot').innerHTML = friendDot(uid);
+      $('chat-input').value = '';
+      $('chat-send').disabled = true;
+      var panel = document.querySelector('.tab-panel[data-panel="friends"]');
+      panel.classList.add('is-chatting');
+      $('chat-view').hidden = false;
+      renderChat(true);
+      markRead(pid);
+      chatUnsub = onSnapshot(
+        query(collection(db, 'chats', pid, 'messages'), orderBy('createdAt', 'desc'), limit(CHAT_LIMIT)),
+        function (snap) {
+          if (!chatOpen || chatOpen.pid !== pid) return;
+          chatMsgs = snap.docs.map(function (d) {
+            var x = d.data();
+            var at = x.createdAt && x.createdAt.toDate ? x.createdAt.toDate() : new Date();
+            return { id: d.id, from: x.from, text: x.text, at: at, pending: d.metadata.hasPendingWrites };
+          }).reverse();
+          renderChat(false);
+          chatError(null);
+          markRead(pid);
+        },
+        function (err) {
+          chatError(err && err.code === 'permission-denied' ? t('chat.denied') : t('chat.failed'));
+        }
+      );
+      setTimeout(function () { var i = $('chat-input'); if (i && !i.closest('[hidden]')) i.focus({ preventScroll: true }); }, 60);
+    }
+
+    function closeChat(silent) {
+      if (chatUnsub) { try { chatUnsub(); } catch (e) {} chatUnsub = null; }
+      var was = chatOpen;
+      chatOpen = null;
+      chatMsgs = [];
+      var panel = document.querySelector('.tab-panel[data-panel="friends"]');
+      if (panel) panel.classList.remove('is-chatting');
+      $('chat-view').hidden = true;
+      $('chat-log').innerHTML = '';
+      chatError(null);
+      if (was && !silent) markRead(was.pid);
+    }
+
+    async function sendChat(text) {
+      if (!chatOpen) return;
+      var pid = chatOpen.pid;
+      var uids = pid.split('_');
+      chatError(null);
+      try {
+        // Both writes in one batch: the message and the summary the other
+        // person's unread dot is built from.
+        var batch = writeBatch(db);
+        batch.set(doc(collection(db, 'chats', pid, 'messages')), { from: currentUid, text: text, createdAt: serverTimestamp() });
+        batch.set(doc(db, 'chats', pid), { uids: uids, lastFrom: currentUid, lastText: text.slice(0, 80), lastAt: serverTimestamp() });
+        await batch.commit();
+      } catch (err) {
+        chatError(err && err.code === 'permission-denied' ? t('chat.denied') : t('chat.failed'));
+      }
+    }
+
+    $('chat-back').addEventListener('click', function () { closeChat(false); });
+    $('chat-input').addEventListener('input', function () {
+      $('chat-send').disabled = !$('chat-input').value.trim();
+    });
+    $('chat-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var input = $('chat-input');
+      var text = input.value.trim();
+      if (!text || !chatOpen) return;
+      input.value = '';
+      $('chat-send').disabled = true;
+      sendChat(text);
+      input.focus({ preventScroll: true });
+      // Show it right away; the snapshot re-renders it with the server time.
+      var log = $('chat-log');
+      setTimeout(function () { log.scrollTop = log.scrollHeight; }, 30);
+    });
 
     function setAddError(msg) {
       var el = $('friends-add-error');
@@ -271,6 +444,8 @@
       Object.keys(friendLocations).forEach(function (uid) {
         if (!seen[uid]) dropFriendLocation(uid);
       });
+      // Removing a friend closes the conversation for both of you.
+      if (chatOpen && !friendships.some(function (x) { return x.id === chatOpen.pid; })) closeChat(true);
 
       var ul = $('friends-list');
       ul.innerHTML = friendships.map(function (f) {
@@ -281,6 +456,8 @@
           '<span class="friend-main"><span class="friend-name">' + escapeHtml(displayName(otherUid)) + '</span>' +
           (nick ? '<span class="friend-email">' + escapeHtml(emailByUid[otherUid]) + '</span>' : '') +
           '<span class="friend-meta">' + escapeHtml(friendMeta(otherUid)) + '</span></span>' +
+          '<button class="friend-chat' + (isUnread(f.id) ? ' is-unread' : '') + '" type="button" data-action="chat" title="' + escapeHtml(t('friends.chatTitle')) + '" aria-label="' + escapeHtml(t('friends.chatTitle')) + '">' +
+            '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg><span class="friend-chat-dot"></span></button>' +
           '<button class="friend-edit" type="button" data-action="edit" title="' + escapeHtml(t('friends.editTitle')) + '" aria-label="' + escapeHtml(t('friends.editTitle')) + '">✎</button>' +
           '<button class="friend-del" type="button" data-action="remove" title="' + escapeHtml(t('friends.removeTitle')) + '">×</button>' +
         '</li>';
@@ -289,6 +466,12 @@
       }).join('');
       bindRowAction(ul, '[data-action="remove"]', function (id) {
         deleteDoc(doc(db, 'friendships', id)).catch(function () {});
+      });
+      ul.querySelectorAll('[data-action="chat"]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var li = btn.closest('li');
+          openChat(li.dataset.id, li.dataset.uid);
+        });
       });
       ul.querySelectorAll('[data-action="edit"]').forEach(function (btn) {
         btn.addEventListener('click', function () {
@@ -303,6 +486,7 @@
         });
       });
       bindEditor();
+      renderUnread();
       Object.keys(friendLocations).forEach(updateFriendMarker);
     }
 
@@ -454,6 +638,9 @@
       incoming = [];
       outgoing = [];
       friendships = [];
+      chatMeta = {};
+      closeChat(true);
+      $('tab-friends').classList.remove('has-unread');
       emailByUid = {};
       friendPrefs = {};
       editingUid = null;
@@ -519,6 +706,23 @@
       unsubs.push(onSnapshot(
         query(collection(db, 'friendRequests'), where('from', '==', currentUid), where('status', '==', 'pending')),
         function (snap) { outgoing = snap.docs.map(toDocObj); renderOutgoing(); },
+        function () {}
+      ));
+      unsubs.push(onSnapshot(
+        query(collection(db, 'chats'), where('uids', 'array-contains', currentUid)),
+        function (snap) {
+          var fresh = {};
+          snap.docs.forEach(function (d) {
+            var x = d.data();
+            fresh[d.id] = {
+              lastFrom: x.lastFrom,
+              lastAt: x.lastAt && x.lastAt.toMillis ? x.lastAt.toMillis() : Date.now(),
+              lastText: x.lastText || ''
+            };
+          });
+          chatMeta = fresh;
+          if (chatOpen) markRead(chatOpen.pid); else renderUnread();
+        },
         function () {}
       ));
       unsubs.push(onSnapshot(

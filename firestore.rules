@@ -39,6 +39,13 @@
 //   sharing:false and the absence of a document look the same to a friend
 //   because the client only ever renders a marker when sharing is true.
 //
+// chats/{pairId} -> { uids: [a, b], lastText, lastFrom, lastAt }
+// chats/{pairId}/messages/{id} -> { from, text, createdAt }
+//   Friend chat. pairId is the same sorted-uid id as friendships, and a chat
+//   can only be read or written while that friendship exists and you are one
+//   of the two people in it — remove a friend and the conversation closes
+//   for both. You can only post as yourself and delete your own messages.
+//
 // friendPrefs/{uid} -> { prefs: { friendUid: { nick, color } }, updatedAt }
 //   The nicknames and map colours you've given your friends. Private to
 //   you: only the owner can read or write it — a friend never sees what
@@ -90,6 +97,35 @@ service cloud.firestore {
         && pairIdParam == pairId(request.resource.data.uids[0], request.resource.data.uids[1]);
       allow delete: if isSignedIn() && request.auth.uid in resource.data.uids;
       allow update: if false;
+    }
+
+    function inChat(pid) {
+      return isSignedIn()
+        && request.auth.uid in pid.split('_')
+        && exists(/databases/$(database)/documents/friendships/$(pid));
+    }
+
+    match /chats/{pid} {
+      allow read: if isSignedIn() && request.auth.uid in resource.data.uids;
+      allow create, update: if inChat(pid)
+        && request.resource.data.uids.size() == 2
+        && request.auth.uid in request.resource.data.uids
+        && pid == pairId(request.resource.data.uids[0], request.resource.data.uids[1])
+        && request.resource.data.lastFrom == request.auth.uid;
+      allow delete: if false;
+
+      match /messages/{mid} {
+        allow read: if inChat(pid);
+        allow create: if inChat(pid)
+          && request.resource.data.keys().hasOnly(['from', 'text', 'createdAt'])
+          && request.resource.data.from == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 1000
+          && request.resource.data.createdAt == request.time;
+        allow update: if false;
+        allow delete: if inChat(pid) && resource.data.from == request.auth.uid;
+      }
     }
 
     match /friendPrefs/{uid} {
